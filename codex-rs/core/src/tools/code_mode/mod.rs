@@ -1,6 +1,7 @@
 mod delegate;
 mod execute_handler;
 pub(crate) mod execute_spec;
+mod reducer;
 mod response_adapter;
 mod telemetry;
 mod wait_handler;
@@ -48,6 +49,10 @@ use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 use delegate::CodeModeDispatchBroker;
 use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
+use reducer::CodeModeOutputReducer;
+use reducer::HttpCodeModeOutputReducer;
+use reducer::ReductionContext;
+use reducer::apply_output_reduction;
 use response_adapter::into_function_call_output_content_items;
 pub(crate) use wait_handler::CodeModeWaitHandler;
 
@@ -72,6 +77,10 @@ pub(crate) struct CodeModeService {
     availability: Result<(), String>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
     default_exec_yield_time_ms: u64,
+    /// Host-side clamp on the model-supplied code-mode output budget.
+    max_output_tokens_ceiling: Option<usize>,
+    /// Optional out-of-process reducer applied at the script-to-model boundary.
+    output_reducer: Option<Arc<dyn CodeModeOutputReducer>>,
     shutting_down: AtomicBool,
     unavailable_warning_emitted: AtomicBool,
 }
@@ -83,12 +92,19 @@ impl CodeModeService {
     ) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         let availability = session_provider.availability();
+        let output_reducer = config
+            .output_reducer
+            .clone()
+            .and_then(HttpCodeModeOutputReducer::new)
+            .map(|reducer| Arc::new(reducer) as Arc<dyn CodeModeOutputReducer>);
         Self {
             session: OnceCell::new(),
             session_provider,
             availability,
             dispatch_broker,
             default_exec_yield_time_ms: config.default_exec_yield_time_ms,
+            max_output_tokens_ceiling: config.max_output_tokens_ceiling,
+            output_reducer,
             shutting_down: AtomicBool::new(false),
             unavailable_warning_emitted: AtomicBool::new(false),
         }
@@ -96,6 +112,14 @@ impl CodeModeService {
 
     pub(crate) fn is_available(&self) -> bool {
         self.availability.is_ok()
+    }
+
+    fn output_reducer(&self) -> Option<&Arc<dyn CodeModeOutputReducer>> {
+        self.output_reducer.as_ref()
+    }
+
+    fn max_output_tokens_ceiling(&self) -> Option<usize> {
+        self.max_output_tokens_ceiling
     }
 
     pub(crate) fn take_unavailable_warning(&self, tool_mode: ToolMode) -> Option<String> {
@@ -232,24 +256,36 @@ impl CodeModeService {
 
 pub(super) async fn handle_runtime_response(
     exec: &ExecContext,
+    call_id: &str,
     response: RuntimeResponse,
     max_output_tokens: Option<usize>,
     started_at: std::time::Instant,
 ) -> Result<FunctionToolOutput, String> {
     let script_status = format_script_status(&response);
+    // The script-to-model boundary: everything below is what enters model context, as opposed to
+    // the nested-tool result in `call_nested_tool`, which is returned into the running script.
+    let context = ReductionContext {
+        thread_id: exec.session.thread_id.to_string(),
+        turn_id: exec.turn.sub_id.clone(),
+        call_id: call_id.to_string(),
+        cell_id: response_cell_id(&response),
+        script_status: script_status.clone(),
+    };
 
     match response {
         RuntimeResponse::Yielded { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
-            content_items = truncate_code_mode_result(content_items, max_output_tokens);
+            content_items =
+                reduce_code_mode_result(exec, &context, content_items, max_output_tokens).await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
         RuntimeResponse::Terminated { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
-            content_items = truncate_code_mode_result(content_items, max_output_tokens);
+            content_items =
+                reduce_code_mode_result(exec, &context, content_items, max_output_tokens).await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
@@ -266,13 +302,40 @@ pub(super) async fn handle_runtime_response(
                     text: format!("Script error:\n{error_text}"),
                 });
             }
-            content_items = truncate_code_mode_result(content_items, max_output_tokens);
+            content_items =
+                reduce_code_mode_result(exec, &context, content_items, max_output_tokens).await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(
                 content_items,
                 Some(success),
             ))
         }
+    }
+}
+
+/// Applies the host reduction seam, falling back to the built-in truncation in every other case.
+async fn reduce_code_mode_result(
+    exec: &ExecContext,
+    context: &ReductionContext,
+    content_items: Vec<FunctionCallOutputContentItem>,
+    max_output_tokens: Option<usize>,
+) -> Vec<FunctionCallOutputContentItem> {
+    let service = &exec.session.services.code_mode_service;
+    apply_output_reduction(
+        service.output_reducer(),
+        context,
+        content_items,
+        max_output_tokens,
+        service.max_output_tokens_ceiling(),
+    )
+    .await
+}
+
+fn response_cell_id(response: &RuntimeResponse) -> String {
+    match response {
+        RuntimeResponse::Yielded { cell_id, .. }
+        | RuntimeResponse::Terminated { cell_id, .. }
+        | RuntimeResponse::Result { cell_id, .. } => cell_id.to_string(),
     }
 }
 
