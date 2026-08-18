@@ -130,7 +130,7 @@ impl CodeModeExecuteHandler {
                 });
         }
         exec.session.services.elicitations.wait_until_clear().await;
-        handle_runtime_response(&exec, response, args.max_output_tokens, started_at)
+        handle_runtime_response(&exec, &call_id, response, args.max_output_tokens, started_at)
             .await
             .map_err(FunctionCallError::RespondToModel)
     }
