@@ -1,0 +1,410 @@
+//! Behavioral coverage for the code-mode output reduction seam.
+//!
+//! These drive a real loopback HTTP server rather than a stubbed trait so the wire contract, the
+//! bearer auth, the timeout, and the JSON parsing are all exercised the way a running Codex would
+//! exercise them. A green build is not evidence that this seam behaves; these are.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use codex_protocol::models::FunctionCallOutputContentItem;
+use pretty_assertions::assert_eq;
+use serde_json::Value as JsonValue;
+use serde_json::json;
+use tempfile::TempDir;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+
+use super::CodeModeOutputReducer;
+use super::HttpCodeModeOutputReducer;
+use super::ReductionContext;
+use super::UNTRUSTED_REPLACEMENT_FOOTER;
+use super::UNTRUSTED_REPLACEMENT_HEADER;
+use super::apply_output_reduction;
+use super::clamp_max_output_tokens;
+use crate::config::CodeModeOutputReducerConfig;
+use crate::tools::code_mode::truncate_code_mode_result;
+
+const REDUCE_PATH: &str = "/v1/reduce-code-mode-output";
+const TOKEN: &str = "test-bridge-token";
+
+fn text(text: &str) -> FunctionCallOutputContentItem {
+    FunctionCallOutputContentItem::InputText {
+        text: text.to_string(),
+    }
+}
+
+/// Large enough to clear a realistic trigger threshold, small enough to stay under the budget.
+fn large_original() -> Vec<FunctionCallOutputContentItem> {
+    vec![text(&"chunk of script output\n".repeat(64))]
+}
+
+fn context() -> ReductionContext {
+    ReductionContext {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        call_id: "call-1".to_string(),
+        cell_id: "cell-1".to_string(),
+        script_status: "Script completed".to_string(),
+    }
+}
+
+struct Harness {
+    server: MockServer,
+    reducer: Arc<dyn CodeModeOutputReducer>,
+    // Keeps the descriptor file alive for the lifetime of the harness.
+    _descriptor_dir: TempDir,
+}
+
+impl Harness {
+    async fn start(timeout: Duration) -> Self {
+        let server = MockServer::start().await;
+        let descriptor_dir = TempDir::new().expect("create descriptor dir");
+        let descriptor_path = descriptor_dir.path().join("bridge.json");
+        std::fs::write(
+            &descriptor_path,
+            json!({
+                "version": 1,
+                "url": format!("{}{REDUCE_PATH}", server.uri()),
+                "token": TOKEN,
+            })
+            .to_string(),
+        )
+        .expect("write descriptor");
+
+        let reducer = HttpCodeModeOutputReducer::new(CodeModeOutputReducerConfig {
+            descriptor_path,
+            min_trigger_bytes: 512,
+            max_request_bytes: 1024 * 1024,
+            max_response_bytes: 64 * 1024,
+            timeout,
+            connect_timeout: Duration::from_millis(500),
+        })
+        .expect("build reducer");
+
+        Self {
+            server,
+            reducer: Arc::new(reducer),
+            _descriptor_dir: descriptor_dir,
+        }
+    }
+
+    async fn reduce(
+        &self,
+        items: Vec<FunctionCallOutputContentItem>,
+    ) -> Vec<FunctionCallOutputContentItem> {
+        apply_output_reduction(
+            Some(&self.reducer),
+            &context(),
+            items,
+            /*max_output_tokens*/ None,
+            /*ceiling*/ None,
+        )
+        .await
+    }
+}
+
+/// The default path must be the pre-existing truncation, unchanged.
+#[tokio::test]
+async fn absent_reducer_is_identical_to_existing_truncation() {
+    let items = vec![text("0123456789012345678901234567890123456789")];
+
+    let reduced = apply_output_reduction(
+        /*reducer*/ None,
+        &context(),
+        items.clone(),
+        Some(5),
+        /*ceiling*/ None,
+    )
+    .await;
+
+    assert_eq!(reduced, truncate_code_mode_result(items, Some(5)));
+    // Pinned against the literal the pre-existing `truncate_code_mode_result` test asserts, so
+    // this fails if the default path ever stops being byte-identical to today's behavior.
+    assert_eq!(
+        reduced,
+        vec![text(concat!(
+            "Warning: truncated output (original token count: 10)\n",
+            "Total output lines: 1\n\n",
+            "0123456789…5 tokens truncated…0123456789"
+        ))]
+    );
+}
+
+/// A healthy reducer replaces the payload, and the replacement is fenced as untrusted data.
+#[tokio::test]
+async fn healthy_reducer_replaces_output_and_fences_it() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .and(header("authorization", format!("Bearer {TOKEN}").as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": [
+                { "type": "input_text", "text": "3 files listed; full output preserved as tm-42." }
+            ]
+        })))
+        .mount(&harness.server)
+        .await;
+
+    let reduced = harness.reduce(large_original()).await;
+
+    assert_eq!(
+        reduced,
+        vec![
+            text(UNTRUSTED_REPLACEMENT_HEADER),
+            text("3 files listed; full output preserved as tm-42."),
+            text(UNTRUSTED_REPLACEMENT_FOOTER),
+        ]
+    );
+}
+
+/// The request carries everything a host needs to file and later serve the preserved output.
+#[tokio::test]
+async fn reduction_request_carries_the_full_original_and_its_identifiers() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": [{ "type": "input_text", "text": "summary" }]
+        })))
+        .mount(&harness.server)
+        .await;
+
+    let original = large_original();
+    harness.reduce(original.clone()).await;
+
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    let body: JsonValue = serde_json::from_slice(&requests[0].body).expect("parse request body");
+    assert_eq!(body["version"], json!(1));
+    assert_eq!(body["thread_id"], json!("thread-1"));
+    assert_eq!(body["turn_id"], json!("turn-1"));
+    assert_eq!(body["call_id"], json!("call-1"));
+    assert_eq!(body["cell_id"], json!("cell-1"));
+    assert_eq!(body["script_status"], json!("Script completed"));
+    // The default budget, resolved host-side, so the reducer knows what it is aiming at.
+    assert_eq!(body["max_output_tokens"], json!(10_000));
+    assert_eq!(
+        body["content_items"],
+        serde_json::to_value(&original).expect("serialize original")
+    );
+}
+
+/// A wedged reducer costs latency, never the turn.
+#[tokio::test]
+async fn timed_out_reducer_falls_back_to_truncation() {
+    let harness = Harness::start(Duration::from_millis(150)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(5))
+                .set_body_json(json!({
+                    "replacement": [{ "type": "input_text", "text": "too late" }]
+                })),
+        )
+        .mount(&harness.server)
+        .await;
+
+    let original = large_original();
+    let reduced = harness.reduce(original.clone()).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+}
+
+/// Garbage on the wire is treated the same as no reducer at all.
+#[tokio::test]
+async fn malformed_reducer_response_falls_back_to_truncation() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>not json at all</html>"))
+        .mount(&harness.server)
+        .await;
+
+    let original = large_original();
+    let reduced = harness.reduce(original.clone()).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+}
+
+/// A structurally valid response whose items are the wrong shape is still garbage.
+#[tokio::test]
+async fn reducer_response_with_invalid_content_items_falls_back_to_truncation() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": [{ "type": "not_a_content_item", "text": "nope" }]
+        })))
+        .mount(&harness.server)
+        .await;
+
+    let original = large_original();
+    let reduced = harness.reduce(original.clone()).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+}
+
+/// An error status is a fallback, not a failure.
+#[tokio::test]
+async fn reducer_error_status_falls_back_to_truncation() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&harness.server)
+        .await;
+
+    let original = large_original();
+    let reduced = harness.reduce(original.clone()).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+}
+
+/// An unauthenticated caller gets nothing, and the seam still produces usable output.
+#[tokio::test]
+async fn reducer_that_rejects_the_token_falls_back_to_truncation() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .and(header("authorization", "Bearer some-other-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": [{ "type": "input_text", "text": "should not be reachable" }]
+        })))
+        .mount(&harness.server)
+        .await;
+
+    let original = large_original();
+    let reduced = harness.reduce(original.clone()).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+}
+
+/// Below the threshold the reducer is never contacted, so small results stay zero-latency.
+#[tokio::test]
+async fn payload_below_the_threshold_never_contacts_the_reducer() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": [{ "type": "input_text", "text": "should not be reachable" }]
+        })))
+        .mount(&harness.server)
+        .await;
+
+    let original = vec![text("small")];
+    let reduced = harness.reduce(original.clone()).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert!(
+        harness
+            .server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty()
+    );
+}
+
+/// A host that has not started its bridge yet must not break code mode.
+#[tokio::test]
+async fn missing_descriptor_falls_back_to_truncation() {
+    let dir = TempDir::new().expect("create descriptor dir");
+    let reducer = HttpCodeModeOutputReducer::new(CodeModeOutputReducerConfig {
+        descriptor_path: dir.path().join("absent.json"),
+        min_trigger_bytes: 0,
+        max_request_bytes: 1024 * 1024,
+        max_response_bytes: 64 * 1024,
+        timeout: Duration::from_secs(5),
+        connect_timeout: Duration::from_millis(500),
+    })
+    .expect("build reducer");
+    let reducer: Arc<dyn CodeModeOutputReducer> = Arc::new(reducer);
+
+    let original = large_original();
+    let reduced =
+        apply_output_reduction(Some(&reducer), &context(), original.clone(), None, None).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+}
+
+#[test]
+fn ceiling_clamps_the_model_supplied_budget() {
+    // No ceiling leaves the model's request, and the default, untouched.
+    assert_eq!(clamp_max_output_tokens(Some(200_000), None), Some(200_000));
+    assert_eq!(clamp_max_output_tokens(None, None), None);
+    // A ceiling binds an oversized request down.
+    assert_eq!(clamp_max_output_tokens(Some(200_000), Some(4_000)), Some(4_000));
+    // ...and leaves a modest request alone.
+    assert_eq!(clamp_max_output_tokens(Some(1_000), Some(4_000)), Some(1_000));
+    // ...and binds the built-in default too, so omitting the argument cannot evade it.
+    assert_eq!(clamp_max_output_tokens(None, Some(4_000)), Some(4_000));
+    assert_eq!(clamp_max_output_tokens(None, Some(20_000)), Some(10_000));
+}
+
+/// End to end: the host ceiling wins over the budget the model asked for.
+#[tokio::test]
+async fn host_ceiling_bounds_output_even_when_the_model_asks_for_more() {
+    let items = vec![text("0123456789012345678901234567890123456789")];
+
+    let reduced = apply_output_reduction(
+        /*reducer*/ None,
+        &context(),
+        items,
+        /*max_output_tokens*/ Some(1_000_000),
+        /*ceiling*/ Some(5),
+    )
+    .await;
+
+    assert_eq!(
+        reduced,
+        vec![text(concat!(
+            "Warning: truncated output (original token count: 10)\n",
+            "Total output lines: 1\n\n",
+            "0123456789…5 tokens truncated…0123456789"
+        ))]
+    );
+}
+
+/// The ceiling also bounds what a healthy reducer can put back into context.
+#[tokio::test]
+async fn host_ceiling_bounds_the_replacement_too() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": [{ "type": "input_text", "text": "a ".repeat(4_000) }]
+        })))
+        .mount(&harness.server)
+        .await;
+
+    let reduced = apply_output_reduction(
+        Some(&harness.reducer),
+        &context(),
+        large_original(),
+        /*max_output_tokens*/ Some(1_000_000),
+        /*ceiling*/ Some(64),
+    )
+    .await;
+
+    let rendered = reduced
+        .iter()
+        .map(|item| match item {
+            FunctionCallOutputContentItem::InputText { text } => text.as_str(),
+            _ => "",
+        })
+        .collect::<String>();
+    assert!(
+        rendered.contains("truncated output"),
+        "expected the replacement to be truncated to the host ceiling, got: {rendered}"
+    );
+}
