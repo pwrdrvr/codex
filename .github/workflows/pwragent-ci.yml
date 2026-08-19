@@ -55,6 +55,12 @@ jobs:
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_TERM_COLOR: always
+      # Required by this workspace, not a tuning knob. `cargo test` runs each
+      # test on a spawned thread with Rust's 2 MiB default, and several
+      # codex-core tests overflow that. Upstream sets the same 8 MiB in
+      # rust-ci.yml, rust-ci-full.yml, the nextest platform workflow, and
+      # .bazelrc; the justfile sets it for local runs.
+      RUST_MIN_STACK: "8388608" # 8 MiB
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
