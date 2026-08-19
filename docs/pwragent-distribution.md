@@ -66,6 +66,24 @@ comparison.
 `pwrdrvr/codex`. Until it does, every macOS job queues indefinitely rather than
 failing, because GitHub waits for a matching runner rather than erroring.
 
+**Prerequisite: rustup on the guest image.** The lab guest provisions Homebrew,
+Xcode Command Line Tools, `git`, `git-lfs`, `tmux`, `node`/`corepack`/`pnpm`,
+and `python3` — everything these jobs need except Rust. `dtolnay/rust-toolchain`
+does not bootstrap rustup; it drives an existing one, so it fails outright on a
+runner without it. Installing rustup is enough: `codex-rs/rust-toolchain.toml`
+pins 1.95.0 and rustup fetches that toolchain, its components, and the
+`x86_64-apple-darwin` target on first use.
+
+Budget disk accordingly. A full `codex-rs` release build plus toolchains is tens
+of gigabytes, and because the runners are persistent it accumulates unless the
+VM is recycled.
+
+**Persistent-runner hazard.** These runners are not `--ephemeral`, so anything a
+job leaves behind outlives it. `macos-sign` therefore captures the user keychain
+search list before signing and restores it on exit; `security list-keychains -s`
+replaces that list rather than appending, and on a hosted runner nobody notices
+because the machine is destroyed afterwards.
+
 **Public-repository note.** This fork is public, so anyone can open a pull
 request against it. Self-hosted runners on a public repository are the classic
 path to running untrusted code on your own hardware. Two things bound that here:

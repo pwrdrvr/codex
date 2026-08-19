@@ -309,7 +309,24 @@ jobs:
           keychain="$RUNNER_TEMP/pwrdrvr-release-signing.keychain-db"
           keychain_password="$(openssl rand -hex 32)"
 
+          # The lab runners are persistent, not ephemeral. `list-keychains -s`
+          # REPLACES the user search list, so without capturing and restoring it
+          # this job would strip the login keychain from every later job on the
+          # same VM until it is rebuilt. Capture before touching anything.
+          original_keychains=()
+          while IFS= read -r entry; do
+            entry="${entry#"${entry%%[![:space:]]*}"}"
+            entry="${entry%\"}"
+            entry="${entry#\"}"
+            if [ -n "$entry" ]; then
+              original_keychains+=("$entry")
+            fi
+          done < <(security list-keychains -d user)
+
           cleanup() {
+            if [ "${#original_keychains[@]}" -gt 0 ]; then
+              security list-keychains -d user -s "${original_keychains[@]}"
+            fi
             security delete-keychain "$keychain" >/dev/null 2>&1 || true
             rm -f "$certificate"
           }
@@ -320,7 +337,8 @@ jobs:
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
-          security list-keychains -d user -s "$keychain"
+          # Keep the original list alongside ours rather than replacing it.
+          security list-keychains -d user -s "$keychain" "${original_keychains[@]}"
           security import "$certificate" \
             -k "$keychain" \
             -P "$CSC_KEY_PASSWORD" \
