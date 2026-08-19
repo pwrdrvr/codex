@@ -1,0 +1,646 @@
+# Downstream Codex distribution for PwrDrvr products (PwrAgent, PwrSnap, PwrGit).
+#
+# This is deliberately NOT upstream's `rust-release.yml`. That workflow targets
+# self-hosted runner groups (`<repo>-runners`) that do not exist on this fork,
+# and signs through OpenAI's own `codesigning` environment. This one builds on
+# GitHub-hosted runners only and signs with PwrDrvr credentials held in the
+# `apple-signing` and `windows-signing` environments.
+#
+# Signing is fail-closed: the signing jobs have no fallback to an unsigned
+# asset, and `release-candidate` requires both of them.
+#
+# To exercise the signing path on a pull request, apply the `ci:release-signing`
+# label. To publish, push a `pwragent-v*` tag.
+
+name: Build PwrAgent Codex distribution
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - labeled
+      - reopened
+      - synchronize
+      - unlabeled
+  push:
+    tags:
+      - "pwragent-v*"
+
+permissions:
+  contents: read
+  id-token: none
+
+concurrency:
+  group: >-
+    pwragent-codex-${{ github.ref }}-${{
+      github.event_name == 'pull_request'
+      && (github.event.action == 'labeled' || github.event.action == 'unlabeled')
+      && github.event.label.name != 'ci:release-signing'
+      && github.run_id
+      || 'release-signing'
+    }}
+  cancel-in-progress: >-
+    ${{ github.event_name == 'pull_request'
+        && (github.event.action == 'synchronize'
+        || github.event.action == 'reopened'
+        || github.event.label.name == 'ci:release-signing') }}
+
+jobs:
+  metadata:
+    name: Resolve release metadata
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ci:release-signing')
+      && (github.event.action == 'synchronize'
+      || github.event.action == 'reopened'
+      || github.event.label.name == 'ci:release-signing'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: none
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate release signing contract
+        run: python3 scripts/pwragent-release/check-release-signing.py
+
+      - name: Resolve downstream version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/pwragent-v* ]]; then
+            version="${GITHUB_REF_NAME#pwragent-v}"
+          else
+            # Upstream leaves the workspace version at 0.0.0 on main and only
+            # bumps it on release branches, so a dev build simply carries
+            # whatever is checked in plus a run-scoped prerelease suffix.
+            upstream_version="$(sed -n \
+              '/^\[workspace.package\]$/{n;s/^version = "\(.*\)"$/\1/p;q;}' \
+              codex-rs/Cargo.toml)"
+            test -n "$upstream_version"
+            version="${upstream_version}-pwragent.dev.${GITHUB_RUN_NUMBER}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Resolved version is not SemVer: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            release_asset: ""
+          - platform: macos-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            release_asset: ""
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            release_asset: pwragent-codex-${{ needs.metadata.outputs.version }}-linux-aarch64.tar.gz
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            release_asset: pwragent-codex-${{ needs.metadata.outputs.version }}-linux-x86_64.tar.gz
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: none
+    env:
+      CODEX_VERSION: ${{ needs.metadata.outputs.version }}
+      RELEASE_ASSET: ${{ matrix.release_asset }}
+      # Unlike upstream, downstream builds keep debuginfo out of the release
+      # profile entirely; PwrDrvr products do not ship or upload dSYMs.
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ matrix.platform }}-${{ hashFiles('codex-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ matrix.platform }}-
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Build release binaries
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --target "${{ matrix.target }}" --release \
+            --bin codex \
+            --bin codex-app-server \
+            --bin codex-code-mode-host
+
+      - name: Stage distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="codex-rs/target/${{ matrix.target }}/release"
+          dest="stage/${{ matrix.platform }}"
+          mkdir -p "$dest"
+          for binary in codex codex-app-server codex-code-mode-host; do
+            install -m 0755 "${release_dir}/${binary}" "${dest}/${binary}"
+          done
+          cp LICENSE NOTICE "$dest/"
+          cat > "${dest}/PWRAGENT-BUILD.txt" <<EOF
+          version=${CODEX_VERSION}
+          source_repository=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
+          source_commit=${GITHUB_SHA}
+          target=${{ matrix.target }}
+          platform=${{ matrix.platform }}
+          EOF
+
+      - name: Package Linux distribution
+        if: runner.os == 'Linux'
+        shell: bash
+        run: tar -C "stage/${{ matrix.platform }}" -czf "$RELEASE_ASSET" .
+
+      - name: Upload Linux release asset
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-${{ matrix.platform }}
+          path: ${{ matrix.release_asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Archive macOS signing input
+        id: archive
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/${{ matrix.platform }}-signing-input.tgz"
+          tar -C "stage/${{ matrix.platform }}" -czf "$tarball" .
+          sha256="$(shasum -a 256 "$tarball" | awk '{print $1}')"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          printf "%s  %s-signing-input.tgz\n" "$sha256" "${{ matrix.platform }}" \
+            > "$tarball.sha256"
+
+      - name: Upload macOS signing input
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: signing-input-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/${{ matrix.platform }}-signing-input.tgz
+            ${{ runner.temp }}/${{ matrix.platform }}-signing-input.tgz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      # Finding 1: workflow_dispatch skips every signing job, so without this the
+      # macOS half of a manual run produces nothing an operator can use.
+      - name: Package unsigned manual-dispatch artifact
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C "stage/${{ matrix.platform }}" \
+            -czf "pwragent-codex-${CODEX_VERSION}-${{ matrix.platform }}-unsigned.tar.gz" .
+
+      - name: Upload unsigned manual-dispatch artifact
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: unsigned-${{ matrix.platform }}
+          path: pwragent-codex-*-${{ matrix.platform }}-unsigned.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  macos-sign:
+    name: Sign ${{ matrix.platform }}
+    if: >-
+      startsWith(github.ref, 'refs/tags/pwragent-v')
+      || (github.event_name == 'pull_request'
+      && contains(github.event.pull_request.labels.*.name, 'ci:release-signing'))
+    needs:
+      - metadata
+      - build
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - macos-aarch64
+          - macos-x86_64
+    runs-on: macos-15
+    timeout-minutes: 20
+    environment: apple-signing
+    permissions:
+      contents: read
+      id-token: none
+    env:
+      CODEX_VERSION: ${{ needs.metadata.outputs.version }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - name: Download macOS signing input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signing-input-${{ matrix.platform }}
+          path: .release-input
+
+      # Unlike windows-sign, this cannot compare against a job output: GitHub
+      # Actions cannot export per-entry outputs from a matrix job, and `build`
+      # is a matrix. Within-run artifacts are therefore the trust boundary on
+      # this side, and the checksum below guards transfer corruption rather
+      # than substitution.
+      - name: Verify macOS signing input
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .release-input
+          shasum -a 256 --check "${PLATFORM}-signing-input.tgz.sha256"
+
+      - name: Expand macOS signing input
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          tar -C stage -xzf ".release-input/${PLATFORM}-signing-input.tgz"
+
+      - name: Sign and verify macOS binaries
+        env:
+          # Base64-encoded Developer ID Application .p12 and its export
+          # password. Store both only on the apple-signing GitHub Environment.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_TEAM_ID: T44CNHC4UH
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${CSC_LINK:?CSC_LINK is required}"
+          : "${CSC_KEY_PASSWORD:?CSC_KEY_PASSWORD is required}"
+          identity="Developer ID Application: PwrDrvr LLC (${APPLE_TEAM_ID})"
+          certificate="$RUNNER_TEMP/pwrdrvr-developer-id.p12"
+          keychain="$RUNNER_TEMP/pwrdrvr-release-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+
+          cleanup() {
+            security delete-keychain "$keychain" >/dev/null 2>&1 || true
+            rm -f "$certificate"
+          }
+          trap cleanup EXIT
+
+          certificate_base64="${CSC_LINK#data:application/x-pkcs12;base64,}"
+          printf '%s' "$certificate_base64" | base64 -D > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security import "$certificate" \
+            -k "$keychain" \
+            -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain"
+          security find-identity -v -p codesigning "$keychain" | grep -F "\"${identity}\""
+
+          for binary in codex codex-app-server codex-code-mode-host; do
+            codesign \
+              --force \
+              --keychain "$keychain" \
+              --options runtime \
+              --timestamp \
+              --sign "$identity" \
+              "stage/${binary}"
+            codesign --verify --all-architectures --strict --verbose=2 "stage/${binary}"
+            codesign --display --verbose=4 "stage/${binary}" \
+              2> "$RUNNER_TEMP/${binary}-codesign.txt"
+            grep -Fx "Authority=${identity}" "$RUNNER_TEMP/${binary}-codesign.txt"
+            grep -Fx "TeamIdentifier=${APPLE_TEAM_ID}" "$RUNNER_TEMP/${binary}-codesign.txt"
+          done
+
+      - name: Package signed macOS distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="pwragent-codex-${CODEX_VERSION}-${PLATFORM}.tar.gz"
+          tar -C stage -czf "$asset" .
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+
+      - name: Upload signed macOS release asset
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-${{ matrix.platform }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-prepare:
+    name: Prepare Windows signing input
+    needs: metadata
+    runs-on: windows-2022
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: none
+    outputs:
+      signing-input-sha256: ${{ steps.archive.outputs.sha256 }}
+    env:
+      CODEX_VERSION: ${{ needs.metadata.outputs.version }}
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo registry
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-windows-x86_64-${{ hashFiles('codex-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-windows-x86_64-
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-pc-windows-msvc
+
+      - name: Configure LLVM linker
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: x86_64-pc-windows-msvc
+
+      # Ahead of the build on purpose: this takes about a minute and depends on
+      # PSGallery, so failing it after a two-hour compile wastes the compile.
+      - name: Prepare pinned TrustedSigning client
+        shell: pwsh -NoProfile -NonInteractive -File {0}
+        run: ./scripts/pwragent-release/prepare-trusted-signing.ps1 -OutputRoot signing-tools
+
+      - name: Build release binaries
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          cargo build --target x86_64-pc-windows-msvc --release \
+            --bin codex \
+            --bin codex-app-server \
+            --bin codex-code-mode-host \
+            --bin codex-windows-sandbox-setup \
+            --bin codex-command-runner
+
+      - name: Stage Windows distribution
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dest = "stage/windows-x86_64"
+          New-Item -ItemType Directory -Force $dest | Out-Null
+          $releaseDir = "codex-rs/target/x86_64-pc-windows-msvc/release"
+          foreach ($binary in @(
+            "codex.exe",
+            "codex-app-server.exe",
+            "codex-code-mode-host.exe",
+            "codex-windows-sandbox-setup.exe",
+            "codex-command-runner.exe"
+          )) {
+            Copy-Item (Join-Path $releaseDir $binary) (Join-Path $dest $binary)
+          }
+          Copy-Item LICENSE, NOTICE $dest
+          @"
+          version=$env:CODEX_VERSION
+          source_repository=$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY
+          source_commit=$env:GITHUB_SHA
+          target=x86_64-pc-windows-msvc
+          platform=windows-x86_64
+          "@ | Set-Content "$dest/PWRAGENT-BUILD.txt"
+
+      - name: Archive Windows signing input
+        id: archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Join-Path $env:RUNNER_TEMP "windows-release-signing-input.tgz"
+          & tar.exe -czf $archive stage/windows-x86_64 signing-tools scripts/pwragent-release
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to archive Windows signing input (exit code $LASTEXITCODE)."
+          }
+          $sha256 = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "$sha256  windows-release-signing-input.tgz" |
+            Set-Content -Path "$archive.sha256" -Encoding ascii
+
+      - name: Package unsigned manual-dispatch artifact
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: >-
+          Compress-Archive
+          -Path "stage/windows-x86_64/*"
+          -DestinationPath "pwragent-codex-$env:CODEX_VERSION-windows-x86_64-unsigned.zip"
+
+      - name: Upload unsigned manual-dispatch artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: unsigned-windows-x86_64
+          path: pwragent-codex-*-windows-x86_64-unsigned.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Windows signing input
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-release-signing-input
+          path: |
+            ${{ runner.temp }}/windows-release-signing-input.tgz
+            ${{ runner.temp }}/windows-release-signing-input.tgz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-sign:
+    name: Authenticode-sign Windows x64 binaries
+    if: >-
+      startsWith(github.ref, 'refs/tags/pwragent-v')
+      || (github.event_name == 'pull_request'
+      && contains(github.event.pull_request.labels.*.name, 'ci:release-signing'))
+    needs:
+      - metadata
+      - windows-prepare
+    runs-on: windows-2022
+    timeout-minutes: 30
+    environment: windows-signing
+    permissions:
+      contents: read
+      id-token: none
+    steps:
+      - name: Download Windows signing input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-release-signing-input
+          path: .release-input
+
+      - name: Verify Windows signing input
+        shell: pwsh
+        env:
+          EXPECTED_SHA256: ${{ needs.windows-prepare.outputs.signing-input-sha256 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = ".release-input/windows-release-signing-input.tgz"
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $env:EXPECTED_SHA256) {
+            throw "Windows signing input digest mismatch: expected $env:EXPECTED_SHA256, got $actual."
+          }
+          $recorded = (Get-Content "$archive.sha256" -Raw).Trim()
+          if ($recorded -ne "$actual  windows-release-signing-input.tgz") {
+            throw "Windows signing input checksum file does not match the downloaded archive."
+          }
+
+      - name: Expand Windows signing input
+        shell: pwsh
+        run: |
+          & tar.exe -xzf .release-input/windows-release-signing-input.tgz
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to expand Windows signing input (exit code $LASTEXITCODE)."
+          }
+
+      - name: Sign and verify Windows binaries
+        shell: pwsh -NoProfile -NonInteractive -File {0}
+        env:
+          WIN_AZURE_SIGN_PUBLISHER_NAME: ${{ vars.WIN_AZURE_SIGN_PUBLISHER_NAME }}
+          WIN_AZURE_SIGN_ENDPOINT: ${{ vars.WIN_AZURE_SIGN_ENDPOINT }}
+          WIN_AZURE_SIGN_ACCOUNT: ${{ vars.WIN_AZURE_SIGN_ACCOUNT }}
+          WIN_AZURE_SIGN_PROFILE: ${{ vars.WIN_AZURE_SIGN_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: >-
+          ./scripts/pwragent-release/sign-windows-binaries.ps1
+          -SigningToolsRoot signing-tools
+          -BinaryPath stage/windows-x86_64/codex.exe,stage/windows-x86_64/codex-app-server.exe,stage/windows-x86_64/codex-code-mode-host.exe,stage/windows-x86_64/codex-windows-sandbox-setup.exe,stage/windows-x86_64/codex-command-runner.exe
+
+      - name: Package signed Windows distribution
+        shell: pwsh
+        env:
+          CODEX_VERSION: ${{ needs.metadata.outputs.version }}
+        run: >-
+          Compress-Archive
+          -Path "stage/windows-x86_64/*"
+          -DestinationPath "pwragent-codex-$env:CODEX_VERSION-windows-x86_64.zip"
+
+      - name: Upload signed Windows release asset
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-windows-x86_64
+          path: pwragent-codex-*-windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release-candidate:
+    name: Assemble signed release candidate
+    if: >-
+      startsWith(github.ref, 'refs/tags/pwragent-v')
+      || (github.event_name == 'pull_request'
+      && contains(github.event.pull_request.labels.*.name, 'ci:release-signing'))
+    needs:
+      - metadata
+      - build
+      - macos-sign
+      - windows-sign
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: none
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          mapfile -t assets < <(find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort)
+          test "${#assets[@]}" -eq 5
+          sha256sum "${assets[@]}" > SHA256SUMS
+
+      - name: Upload signed release candidate
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: signed-release-candidate
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/pwragent-v')
+    needs:
+      - metadata
+      - release-candidate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: none
+    steps:
+      - name: Download signed release candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-release-candidate
+          path: dist
+
+      - name: Publish immutable release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $RELEASE_TAG already exists; downstream assets are immutable." >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --prerelease \
+            --title "PwrAgent Codex ${VERSION}" \
+            --notes "Downstream Codex binaries for PwrDrvr products. Source commit: ${GITHUB_SHA}. macOS and Windows executables are signed by PwrDrvr LLC."
