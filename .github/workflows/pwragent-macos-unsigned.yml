@@ -1,0 +1,205 @@
+# Unsigned macOS arm64 build for hands-on testing.
+#
+# This is deliberately separate from `pwragent-release.yml`. That workflow is
+# fail-closed: every artifact it produces on a PR goes through Developer ID
+# signing, and `scripts/pwragent-release/check-release-signing.py` pins that
+# property. Threading an unsigned path through it would mean gating the signing
+# jobs on a second label inside the very workflow whose contract is "no unsigned
+# output" — so the unsigned build lives here instead, where it touches no
+# secrets and enters no environment.
+#
+# Apply the `ci:macos-unsigned` label to a pull request and the run attaches an
+# `unsigned-macos-aarch64` artifact. It is for smoke-testing a build on an Apple
+# Silicon Mac; it carries no signature or notarization and must never be
+# shipped. To exercise the real signed path, use `ci:release-signing`.
+
+name: Build unsigned macOS arm64
+
+on:
+  pull_request:
+    types:
+      - labeled
+      - reopened
+      - synchronize
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: none
+
+# A `labeled` event for some unrelated label still starts a run of this
+# workflow, which then skips at the job level. Without the run-scoped group
+# below it would share a group with — and so cancel — an unsigned build already
+# in flight on the same PR.
+concurrency:
+  group: >-
+    pwragent-macos-unsigned-${{ github.ref }}-${{
+      github.event_name == 'pull_request'
+      && github.event.action == 'labeled'
+      && github.event.label.name != 'ci:macos-unsigned'
+      && github.run_id
+      || 'build'
+    }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build macos-aarch64 (unsigned)
+    # `synchronize` and `reopened` keep the artifact current on an
+    # already-labeled PR; the `labeled` arm restricts new runs to this label so
+    # that adding an unrelated one does not trigger a build.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (contains(github.event.pull_request.labels.*.name, 'ci:macos-unsigned')
+      && (github.event.action == 'synchronize'
+      || github.event.action == 'reopened'
+      || github.event.label.name == 'ci:macos-unsigned'))
+    runs-on: macos-15
+    # Measured in the first end-to-end release run: macos-aarch64 took 114
+    # minutes cold and macos-x86_64 was killed at the old 120 minute cap.
+    # Matches the release build's 240.
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: none
+    env:
+      # Matches the release build: PwrDrvr products do not ship or upload dSYMs.
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_TERM_COLOR: always
+      TARGET: aarch64-apple-darwin
+      PLATFORM: macos-aarch64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve build version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same derivation as the release pipeline's untagged runs. Upstream
+          # leaves the workspace version at 0.0.0 outside release branches, so
+          # this normally reads 0.0.0-pwragent.dev.N.
+          upstream_version="$(sed -n \
+            '/^\[workspace.package\]$/{n;s/^version = "\(.*\)"$/\1/p;q;}' \
+            codex-rs/Cargo.toml)"
+          test -n "$upstream_version"
+          echo "version=${upstream_version}-pwragent.dev.${GITHUB_RUN_NUMBER}" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: aarch64-apple-darwin
+
+      # Deliberately the same key as the release workflow's macos-aarch64 leg:
+      # same target, same release profile, same three binaries, so the two can
+      # read each other's `codex-rs/target`. A cold build here is around two
+      # hours, which is the difference between a usable label and an ignored one.
+      #
+      # Restore and save are split for the same reason they are there — the
+      # combined `actions/cache` skips its save when the job fails, so a build
+      # killed at the timeout would discard everything it compiled.
+      - name: Restore Cargo cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: cargo-macos-aarch64-${{ hashFiles('codex-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-macos-aarch64-
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: aarch64-apple-darwin
+
+      - name: Build release binaries
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --target "$TARGET" --release \
+            --bin codex \
+            --bin codex-app-server \
+            --bin codex-code-mode-host
+
+      # Cache entries are immutable once written, hence run_id/run_attempt in
+      # the save key.
+      - name: Save Cargo cache
+        if: always()
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: cargo-macos-aarch64-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Stage distribution
+        shell: bash
+        env:
+          CODEX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          release_dir="codex-rs/target/${TARGET}/release"
+          dest="stage/${PLATFORM}"
+          mkdir -p "$dest"
+          for binary in codex codex-app-server codex-code-mode-host; do
+            install -m 0755 "${release_dir}/${binary}" "${dest}/${binary}"
+          done
+          cp LICENSE NOTICE "$dest/"
+          # `signed=no` is the field that distinguishes this tree from the
+          # release one, which is otherwise laid out identically.
+          cat > "${dest}/PWRAGENT-BUILD.txt" <<EOF
+          version=${CODEX_VERSION}
+          source_repository=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
+          source_commit=${GITHUB_SHA}
+          target=${TARGET}
+          platform=${PLATFORM}
+          signed=no
+          EOF
+
+      - name: Package unsigned artifact
+        shell: bash
+        env:
+          CODEX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tar -C "stage/${PLATFORM}" \
+            -czf "pwragent-codex-${CODEX_VERSION}-${PLATFORM}-unsigned.tar.gz" .
+
+      - name: Upload unsigned artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: unsigned-macos-aarch64
+          path: pwragent-codex-*-macos-aarch64-unsigned.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Summarize
+        shell: bash
+        env:
+          CODEX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Unsigned macOS arm64 build"
+            echo
+            echo "Artifact: \`unsigned-macos-aarch64\` (version \`${CODEX_VERSION}\`)"
+            echo
+            echo "These binaries are neither signed nor notarized. Gatekeeper"
+            echo "will refuse them until the quarantine attribute is cleared:"
+            echo
+            echo '```bash'
+            echo "tar -xzf pwragent-codex-${CODEX_VERSION}-macos-aarch64-unsigned.tar.gz"
+            echo "xattr -dr com.apple.quarantine codex codex-app-server codex-code-mode-host"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
