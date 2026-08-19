@@ -81,15 +81,21 @@ for fragment in (
 ):
     require(workflow, fragment, "PR signing trigger guard")
 
-# Upstream's own release pipeline runs on self-hosted runner groups that do not
-# exist on this fork. Keeping the downstream build on hosted runners is what
-# makes it runnable here at all, so it is part of the contract. Comments are
-# stripped first so the header can name the upstream runners it is avoiding.
+# Upstream's release pipeline targets OpenAI's own runner groups, which do not
+# exist here; reaching for one is how this would silently stop working. macOS is
+# the expensive tier on hosted runners, so it must land on the PwrDrvr lab
+# runners instead. Comments are stripped first so the workflow header can name
+# the upstream runners it is avoiding.
 workflow_code = "\n".join(
     line for line in workflow.splitlines() if not line.lstrip().startswith("#")
 )
-if "-runners" in workflow_code or "self-hosted" in workflow_code:
-    fail("the downstream workflow must only use GitHub-hosted runners")
+if "-runners" in workflow_code:
+    fail("the downstream workflow must not target an upstream runner group")
+for hosted_macos in ("macos-15-xlarge", "macos-15-intel", "macos-latest"):
+    if hosted_macos in workflow_code:
+        fail(f"macOS work must use the pwrdrvr-macos lab runners, not {hosted_macos}")
+if workflow_code.count("pwrdrvr-macos") < 3:
+    fail("both macOS build entries and macos-sign must target pwrdrvr-macos")
 
 build = job(workflow, "build")
 macos_sign = job(workflow, "macos-sign")

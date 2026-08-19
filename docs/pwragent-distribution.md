@@ -10,8 +10,8 @@ Built by [`.github/workflows/pwragent-release.yml`](../.github/workflows/pwragen
 
 | Platform | Runner | Target | Asset |
 | --- | --- | --- | --- |
-| macOS arm64 | `macos-15` | `aarch64-apple-darwin` | `pwragent-codex-<version>-macos-aarch64.tar.gz` |
-| macOS x64 | `macos-15-intel` | `x86_64-apple-darwin` | `pwragent-codex-<version>-macos-x86_64.tar.gz` |
+| macOS arm64 | `pwrdrvr-macos` (lab) | `aarch64-apple-darwin` | `pwragent-codex-<version>-macos-aarch64.tar.gz` |
+| macOS x64 | `pwrdrvr-macos` (lab, cross) | `x86_64-apple-darwin` | `pwragent-codex-<version>-macos-x86_64.tar.gz` |
 | Linux arm64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `pwragent-codex-<version>-linux-aarch64.tar.gz` |
 | Linux x64 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | `pwragent-codex-<version>-linux-x86_64.tar.gz` |
 | Windows x64 | `windows-2022` | `x86_64-pc-windows-msvc` | `pwragent-codex-<version>-windows-x86_64.zip` |
@@ -33,7 +33,7 @@ workflow rather than a reused one:
 
 | | Upstream | Downstream |
 | --- | --- | --- |
-| Runners | self-hosted groups (`codex-runners`, `macos-15-xlarge`) | GitHub-hosted only |
+| Runners | OpenAI self-hosted groups (`codex-runners`, `macos-15-xlarge`) | PwrDrvr lab macOS + GitHub-hosted Linux/Windows |
 | Signing | OpenAI, `codesigning` environment, Azure Key Vault | PwrDrvr, `apple-signing` / `windows-signing` |
 | Linux libc | MUSL, plus a bundled `bwrap` | glibc, no bundled `bwrap` |
 | macOS layout | per-arch, DMG, dSYM symbol archives | per-arch tarballs, no DMG, no symbols |
@@ -44,6 +44,34 @@ Upstream builds `bwrap` first and embeds its digest into `codex` so the bundled
 sandbox helper can be verified at runtime; this pipeline does not, so Linux
 sandboxing falls back to whatever `codex` does without a bundled `bwrap`.
 Revisit if a PwrDrvr product ships Codex on Linux to end users.
+
+## Runners
+
+macOS builds and signing run on the PwrDrvr lab runners, registered org-wide in
+the **PwrDrvr macOS** runner group with labels
+`self-hosted, macOS, ARM64, pwrdrvr-macos`. Hosted macOS is the expensive tier
+and the lab hardware is already paid for, so `check-release-signing.py` fails
+the build if a macOS job drifts back to `macos-latest`, `macos-15-intel`, or
+`macos-15-xlarge`.
+
+The lab is Apple silicon only. `x86_64-apple-darwin` is cross-compiled from
+ARM64, which Rust and the Apple toolchain both support, and `codesign` is
+architecture-agnostic, so no Intel runner is needed.
+
+Linux and Windows stay on GitHub-hosted runners: the lab has no self-hosted
+capacity for them, and those tiers are cheap (Linux) or tolerable (Windows) by
+comparison.
+
+**Prerequisite.** The `PwrDrvr macOS` runner group must grant access to
+`pwrdrvr/codex`. Until it does, every macOS job queues indefinitely rather than
+failing, because GitHub waits for a matching runner rather than erroring.
+
+**Public-repository note.** This fork is public, so anyone can open a pull
+request against it. Self-hosted runners on a public repository are the classic
+path to running untrusted code on your own hardware. Two things bound that here:
+no job in this workflow starts without a maintainer applying the
+`ci:release-signing` label, and GitHub requires approval before any workflow
+runs on a pull request from a fork. Do not relax either without revisiting this.
 
 ## Signing
 
