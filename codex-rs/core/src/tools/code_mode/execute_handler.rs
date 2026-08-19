@@ -76,6 +76,12 @@ impl CodeModeExecuteHandler {
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         let cell_id = started_cell.cell_id.clone();
+        // Recorded here rather than passed down, because a `wait` call resumes
+        // this cell without ever seeing the source that started it.
+        exec.session
+            .services
+            .code_mode_service
+            .record_cell_script(&cell_id, args.code.as_str());
         telemetry.cell_id = Some(cell_id.to_string());
         exec.session
             .services

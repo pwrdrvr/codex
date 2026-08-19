@@ -1052,6 +1052,15 @@ pub struct ToolRegistryConfig {
 const DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS: u64 = 30_000;
 
 /// Below this payload size the external reducer is skipped so ordinary results stay zero-latency.
+///
+/// This is measured per reduction, not per turn, and `wait` returns only the output produced
+/// since the last yield. A script that dribbles out small increments therefore never reaches the
+/// reducer at all, while one large burst costs exactly one reduction. The pathological case is a
+/// script sustaining large bursts across many yields, which is what this dial is for.
+///
+/// 16 KiB is roughly 4k tokens, about 40% of the `DEFAULT_MAX_OUTPUT_TOKENS` budget, so the
+/// reducer engages well before the built-in truncation would — which is the point: output can
+/// pollute context long before it is large enough to be truncated.
 pub const DEFAULT_CODE_MODE_REDUCER_MIN_TRIGGER_BYTES: usize = 16 * 1024;
 /// Above this payload size the external reducer is skipped rather than shipping a huge body.
 ///
