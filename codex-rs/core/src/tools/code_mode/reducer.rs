@@ -63,6 +63,11 @@ pub(super) struct ReductionContext {
     pub turn_id: String,
     pub call_id: String,
     pub cell_id: String,
+    /// Source of the script whose output is being reduced, when it is still
+    /// known. `None` rather than empty so a host can tell "no script recorded"
+    /// from "script was empty".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
     /// The `Script completed` / `Script running with cell ID ...` line, before it is prepended.
     pub script_status: String,
 }

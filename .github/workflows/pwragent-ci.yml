@@ -57,6 +57,15 @@ jobs:
           # so without this a change that breaks a caller would pass the gate
           # and only surface at release time. Debug profile: this is a link
           # check, not an artifact.
+          # `--lib` above deliberately skips core/tests/suite, which wants
+          # sandbox helpers and exec servers. This one integration test is the
+          # exception: it is the only coverage of the config -> CodeModeService
+          # -> live reducer path, which fails silently to `None` when broken.
+          - name: integration
+            command: >-
+              cargo nextest run --locked -p codex-core
+              --test all --no-fail-fast
+              -E 'test(code_mode_output_reducer)'
           - name: build
             command: >-
               cargo build --locked
