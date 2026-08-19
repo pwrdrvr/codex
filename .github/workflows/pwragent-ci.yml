@@ -126,14 +126,14 @@ jobs:
       # across tests, which is how global tracing-subscriber state leaked
       # between them. The justfile's own guidance is to install it this way.
       - name: Cache cargo-nextest
-        if: matrix.name == 'test'
+        if: contains(matrix.command, 'nextest')
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ~/.cargo/bin/cargo-nextest
           key: cargo-nextest-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install cargo-nextest
-        if: matrix.name == 'test'
+        if: contains(matrix.command, 'nextest')
         shell: bash
         run: |
           set -euo pipefail
