@@ -298,11 +298,20 @@ pub(super) async fn handle_runtime_response(
     started_at: std::time::Instant,
 ) -> Result<FunctionToolOutput, String> {
     let script_status = format_script_status(&response);
-    let cell_id = response_cell_id(&response);
     // A yielded cell can produce more output, so keep its script; anything else
     // is finished with it.
     let is_terminal = !matches!(response, RuntimeResponse::Yielded { .. });
     let service = &exec.session.services.code_mode_service;
+    // Scoped so the borrow of `response` ends before the match below moves it.
+    let (cell_id, script) = {
+        let cell_id = response_cell_id(&response);
+        (
+            cell_id.to_string(),
+            service
+                .cell_script(cell_id, is_terminal)
+                .map(|script| script.to_string()),
+        )
+    };
     // The script-to-model boundary: everything below is what enters model context, as opposed to
     // the nested-tool result in `call_nested_tool`, which is returned into the running script.
     let context = ReductionContext {
@@ -312,9 +321,7 @@ pub(super) async fn handle_runtime_response(
         // Summarizing a wall of text is guesswork without knowing it came from,
         // say, a `rg --files` invocation, so hand the reducer the program that
         // produced it.
-        script: service
-            .cell_script(&cell_id, is_terminal)
-            .map(|script| script.to_string()),
+        script,
         cell_id,
         script_status: script_status.clone(),
     };
@@ -378,11 +385,11 @@ async fn reduce_code_mode_result(
     .await
 }
 
-fn response_cell_id(response: &RuntimeResponse) -> String {
+fn response_cell_id(response: &RuntimeResponse) -> &CellId {
     match response {
         RuntimeResponse::Yielded { cell_id, .. }
         | RuntimeResponse::Terminated { cell_id, .. }
-        | RuntimeResponse::Result { cell_id, .. } => cell_id.to_string(),
+        | RuntimeResponse::Result { cell_id, .. } => cell_id,
     }
 }
 
