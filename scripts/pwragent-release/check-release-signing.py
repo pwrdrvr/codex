@@ -102,11 +102,12 @@ for name, section in (("build", build), ("windows-prepare", windows_prepare)):
     if "environment:" in section or "secrets." in section:
         fail(f"{name} must remain a no-secret preparation job")
 
-# The macOS payload and the digest that authenticates it travel as separate
-# artifacts. GitHub Actions cannot export per-entry outputs from a matrix job,
-# which is how grok-build passes its digest, so this is the closest equivalent.
+# The macOS payload ships with its own checksum file. GitHub Actions cannot
+# export per-entry outputs from a matrix job, so unlike windows-sign there is no
+# out-of-band digest to compare against on this side; within-run artifacts are
+# the trust boundary. Do not "strengthen" this with a second artifact holding
+# the same digest -- the same job writes both, so it proves nothing.
 require(build, "name: signing-input-${{ matrix.platform }}", "build")
-require(build, "name: signing-input-digest-${{ matrix.platform }}", "build")
 
 for binary in UNIX_BINARIES:
     require(build, f"--bin {binary}", "build")

@@ -121,6 +121,13 @@ Without the label, `pwragent-release.yml` does not build at all — only
 `pwragent-release-check.yml` runs, which validates the contract and the pinned
 TrustedSigning client without secrets.
 
+### Manually (`workflow_dispatch`)
+
+A manual run builds every platform but enters no signing environment. It emits
+the two Linux tarballs plus `unsigned-macos-aarch64`, `unsigned-macos-x86_64`,
+and `unsigned-windows-x86_64` artifacts. Those are for smoke-testing a build;
+they carry no signature and must never be shipped.
+
 Note that a labeled PR run enters the protected environments from
 `refs/pull/<PR number>/merge`. If either environment gets a branch protection
 rule, that ref has to be allowed or the signing jobs will hang waiting for a
