@@ -15,6 +15,8 @@
 
 use anyhow::Result;
 use codex_core::config::CodeModeOutputReducerConfig;
+use codex_features::Feature;
+use codex_protocol::openai_models::ToolMode;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -78,12 +80,17 @@ async fn run_turn_and_read_model_visible_output(
     reducer: Option<CodeModeOutputReducerConfig>,
 ) -> Result<String> {
     let server = responses::start_mock_server().await;
+    // Enabling the feature is not enough: `effective_tool_mode` reads the
+    // model's own tool mode, and without this `exec` is never registered and the
+    // turn comes back "unsupported custom tool call: exec".
     let mut builder = test_codex()
-        .with_model("test-gpt-5.1-codex")
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.tool_mode = Some(ToolMode::CodeMode);
+        })
         .with_config(move |config| {
             config
                 .features
-                .enable(codex_features::Feature::CodeMode)
+                .enable(Feature::CodeMode)
                 .expect("code mode should be enabled");
             config.code_mode.output_reducer = reducer;
         });
