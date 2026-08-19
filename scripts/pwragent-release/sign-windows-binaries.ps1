@@ -52,22 +52,23 @@ $env:LOCALAPPDATA = $verifiedSigningTools.LocalAppDataRoot
 
 Import-Module $moduleManifest -Force -ErrorAction Stop
 
-# One call covering every file. Invoke-TrustedSigning accepts a file list, and a
-# single call keeps the signing account round-trips proportional to releases
-# rather than to the number of binaries Codex ships.
-$signingParameters = @{
-  Endpoint = $env:WIN_AZURE_SIGN_ENDPOINT
-  CodeSigningAccountName = $env:WIN_AZURE_SIGN_ACCOUNT
-  CertificateProfileName = $env:WIN_AZURE_SIGN_PROFILE
-  Files = $resolvedBinaries
-  FileDigest = "SHA256"
-  TimestampRfc3161 = "http://timestamp.acs.microsoft.com"
-  TimestampDigest = "SHA256"
-}
-Invoke-TrustedSigning @signingParameters
-
+# One call per file. `Invoke-TrustedSigning -Files` is typed [string], not
+# [string[]] -- passing an array fails argument transformation with "Cannot
+# convert value to type System.String" before any signing happens. Sign and
+# verify each binary in the same pass so a failure names the file it belongs to.
 $expectedCommonName = "CN=$expectedPublisher"
 foreach ($resolvedBinary in $resolvedBinaries) {
+  $signingParameters = @{
+    Endpoint = $env:WIN_AZURE_SIGN_ENDPOINT
+    CodeSigningAccountName = $env:WIN_AZURE_SIGN_ACCOUNT
+    CertificateProfileName = $env:WIN_AZURE_SIGN_PROFILE
+    Files = $resolvedBinary
+    FileDigest = "SHA256"
+    TimestampRfc3161 = "http://timestamp.acs.microsoft.com"
+    TimestampDigest = "SHA256"
+  }
+  Invoke-TrustedSigning @signingParameters
+
   $signature = Get-AuthenticodeSignature -LiteralPath $resolvedBinary
   if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
     throw "Authenticode verification failed for ${resolvedBinary}: $($signature.Status) ($($signature.StatusMessage))"
