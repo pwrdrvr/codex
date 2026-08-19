@@ -85,7 +85,7 @@ async fn run_turn_and_read_model_visible_output(
                 .features
                 .enable(codex_features::Feature::CodeMode)
                 .expect("code mode should be enabled");
-            config.code_mode.output_reducer = reducer.clone();
+            config.code_mode.output_reducer = reducer;
         });
     let test = builder.build(&server).await?;
 
