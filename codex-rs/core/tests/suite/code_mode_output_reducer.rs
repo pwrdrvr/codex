@@ -16,7 +16,6 @@
 use anyhow::Result;
 use codex_core::config::CodeModeOutputReducerConfig;
 use codex_features::Feature;
-use codex_protocol::openai_models::ToolMode;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -80,18 +79,15 @@ async fn run_turn_and_read_model_visible_output(
     reducer: Option<CodeModeOutputReducerConfig>,
 ) -> Result<String> {
     let server = responses::start_mock_server().await;
-    // Enabling the feature is not enough: `effective_tool_mode` reads the
-    // model's own tool mode, and without this `exec` is never registered and the
-    // turn comes back "unsupported custom tool call: exec".
+    // Mirrors run_code_mode_turn_with_model_and_config in code_mode.rs. This
+    // model's catalog entry already selects code mode; enabling the feature
+    // alone leaves `exec` unregistered and every turn answers
+    // "unsupported custom tool call: exec".
     let mut builder = test_codex()
-        .with_model_info_override("gpt-5.5", |model_info| {
-            model_info.tool_mode = Some(ToolMode::CodeMode);
-        })
+        .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::CodeMode)
-                .expect("code mode should be enabled");
+            let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
             config.code_mode.output_reducer = reducer;
         });
     let test = builder.build(&server).await?;
@@ -116,11 +112,35 @@ async fn run_turn_and_read_model_visible_output(
 
     test.submit_turn("summarize the output").await?;
 
-    // Assert against the serialized request rather than picking apart content
-    // items: this is literally the payload the model was sent, so a change in
-    // how output is chunked cannot make the test quietly stop checking.
-    let request = follow_up.single_request();
-    Ok(request.body_json().to_string())
+    Ok(model_visible_tool_output(&follow_up.single_request().body_json()))
+}
+
+/// Pulls out only the `custom_tool_call_output` for `call-1`.
+///
+/// Asserting on the whole serialized request looks robust and is not: the
+/// request also carries the `custom_tool_call` *input*, which is the script
+/// source, which contains the very text these tests look for. Two of these
+/// tests passed that way while `exec` was not even registered.
+fn model_visible_tool_output(body: &Value) -> String {
+    let outputs: Vec<String> = body["input"]
+        .as_array()
+        .expect("request should carry input items")
+        .iter()
+        .filter(|item| {
+            item["type"] == "custom_tool_call_output" && item["call_id"] == "call-1"
+        })
+        .map(|item| item["output"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        !outputs.is_empty(),
+        "no tool output for call-1 in: {body}"
+    );
+    let joined = outputs.concat();
+    assert!(
+        !joined.contains("unsupported custom tool call"),
+        "code mode was not active, so nothing under test actually ran: {joined}"
+    );
+    joined
 }
 
 /// With no reducer configured the model sees the script's own output, only ever
