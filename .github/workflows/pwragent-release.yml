@@ -116,7 +116,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             release_asset: pwragent-codex-${{ needs.metadata.outputs.version }}-linux-x86_64.tar.gz
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 240
     permissions:
       contents: read
       id-token: none
@@ -138,16 +138,25 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Cache Cargo registry
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      # Split restore/save on purpose. The combined `actions/cache` skips its
+      # post-step save when the job fails, so a build killed at the timeout
+      # threw away every object it had compiled. `if: always()` keeps the
+      # partial target dir, letting the next attempt resume instead of
+      # restarting. Upstream uses the same split in bazel.yml, guarded with
+      # `!cancelled()`; that guard is omitted here because a timeout is exactly
+      # the case whose output is worth keeping.
+      - name: Restore Cargo cache
+        id: cargo_cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: cargo-registry-${{ matrix.platform }}-${{ hashFiles('codex-rs/Cargo.lock') }}
+            codex-rs/target
+          key: cargo-${{ matrix.platform }}-${{ hashFiles('codex-rs/Cargo.lock') }}
           restore-keys: |
-            cargo-registry-${{ matrix.platform }}-
+            cargo-${{ matrix.platform }}-
 
       - name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8
@@ -163,6 +172,17 @@ jobs:
             --bin codex \
             --bin codex-app-server \
             --bin codex-code-mode-host
+
+      - name: Save Cargo cache
+        if: always()
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: cargo-${{ matrix.platform }}-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Stage distribution
         shell: bash
@@ -365,7 +385,7 @@ jobs:
     name: Prepare Windows signing input
     needs: metadata
     runs-on: windows-2022
-    timeout-minutes: 120
+    timeout-minutes: 240
     permissions:
       contents: read
       id-token: none
@@ -385,16 +405,17 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Cache Cargo registry
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      - name: Restore Cargo cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: cargo-registry-windows-x86_64-${{ hashFiles('codex-rs/Cargo.lock') }}
+            codex-rs/target
+          key: cargo-windows-x86_64-${{ hashFiles('codex-rs/Cargo.lock') }}
           restore-keys: |
-            cargo-registry-windows-x86_64-
+            cargo-windows-x86_64-
 
       - name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8
@@ -424,6 +445,17 @@ jobs:
             --bin codex-code-mode-host \
             --bin codex-windows-sandbox-setup \
             --bin codex-command-runner
+
+      - name: Save Cargo cache
+        if: always()
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: cargo-windows-x86_64-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Stage Windows distribution
         shell: pwsh
