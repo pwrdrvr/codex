@@ -62,7 +62,13 @@ jobs:
           # exception: it is the only coverage of the config -> CodeModeService
           # -> live reducer path, which fails silently to `None` when broken.
           - name: integration
+            # The host binary must exist on disk before the test runs:
+            # `CodeModeSessionProvider::availability` checks for the file, and
+            # without it code mode silently falls back to direct tools and every
+            # turn answers "unsupported custom tool call: exec".
+            # `cargo nextest -p codex-core` does not build it, so build it first.
             command: >-
+              cargo build --locked --bin codex-code-mode-host &&
               cargo nextest run --locked -p codex-core
               --test all --no-fail-fast
               -E 'test(code_mode_output_reducer)'

@@ -136,9 +136,14 @@ fn model_visible_tool_output(body: &Value) -> String {
         "no tool output for call-1 in: {body}"
     );
     let joined = outputs.concat();
+    // Usually means codex-code-mode-host was not built, so
+    // CodeModeSessionProvider::availability failed and code mode fell back to
+    // direct tools. Fail loudly: a session where the seam was never reached
+    // must not read as a pass.
     assert!(
         !joined.contains("unsupported custom tool call"),
-        "code mode was not active, so nothing under test actually ran: {joined}"
+        "code mode was not active, so nothing under test actually ran \
+         (is codex-code-mode-host built?): {joined}"
     );
     joined
 }
