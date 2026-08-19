@@ -1,0 +1,79 @@
+# Guards the downstream release pipeline itself.
+#
+# Runs on every change to the release workflow or its scripts, and takes no
+# secrets and enters no environment, so it can run freely on any PR. The
+# expensive signed build only runs behind the `ci:release-signing` label.
+
+name: Check PwrAgent release signing
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pwragent-release*.yml"
+      - "docs/pwragent-distribution.md"
+      - "scripts/pwragent-release/**"
+  push:
+    branches:
+      - pwragent
+    paths:
+      - ".github/workflows/pwragent-release*.yml"
+      - "docs/pwragent-distribution.md"
+      - "scripts/pwragent-release/**"
+
+permissions:
+  contents: read
+  id-token: none
+
+jobs:
+  release-signing-contract:
+    name: Release signing contract
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: none
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate fail-closed signing workflow
+        run: python3 scripts/pwragent-release/check-release-signing.py
+
+  trusted-signing-preparation:
+    name: Prepare TrustedSigning client
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: none
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download and validate pinned signing client
+        shell: pwsh -NoProfile -NonInteractive -File {0}
+        run: >-
+          ./scripts/pwragent-release/prepare-trusted-signing.ps1
+          -OutputRoot $env:RUNNER_TEMP/signing-tools
+
+      - name: Verify signing client after archive round-trip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Join-Path $env:RUNNER_TEMP "signing-tools.tgz"
+          $expandedRoot = Join-Path $env:RUNNER_TEMP "signing-tools-roundtrip"
+          & tar.exe -czf $archive -C $env:RUNNER_TEMP signing-tools
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to archive prepared signing tools (exit code $LASTEXITCODE)."
+          }
+          New-Item -ItemType Directory -Force $expandedRoot | Out-Null
+          & tar.exe -xzf $archive -C $expandedRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to expand prepared signing tools (exit code $LASTEXITCODE)."
+          }
+          & ./scripts/pwragent-release/verify-trusted-signing-tools.ps1 `
+            -SigningToolsRoot (Join-Path $expandedRoot "signing-tools") |
+            Out-Null
