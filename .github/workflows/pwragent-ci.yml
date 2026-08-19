@@ -1,0 +1,139 @@
+# Minimal PR gate for the PwrDrvr fork.
+#
+# Upstream's `blocking-ci` fans out to Bazel, nextest, and the SDK suites across
+# self-hosted runner groups that do not exist here, so it is disabled on this
+# fork. That left `codex-rs` changes with no verification at all. This is the
+# useful sliver: one Linux x64 runner proving the workspace still compiles, the
+# unit tests still pass, and clippy's denied lints are still clean.
+#
+# Standard GitHub-hosted runners are free on public repositories, so this costs
+# nothing to run on every pull request.
+
+name: PwrAgent CI
+
+on:
+  pull_request:
+    paths:
+      - "codex-rs/**"
+      - ".github/workflows/pwragent-ci.yml"
+      - ".github/actions/setup-rusty-v8/**"
+      - ".github/scripts/rusty_v8_bazel.py"
+  push:
+    branches:
+      - pwragent
+    paths:
+      - "codex-rs/**"
+      - ".github/workflows/pwragent-ci.yml"
+      - ".github/actions/setup-rusty-v8/**"
+      - ".github/scripts/rusty_v8_bazel.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: none
+
+concurrency:
+  group: pwragent-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `--locked` matters here: it fails if Cargo.lock does not already
+          # satisfy the manifests, which is the check a hand-edited lockfile
+          # needs and that a plain build would silently paper over.
+          - name: test
+            command: cargo nextest run --locked -p codex-core --lib --no-fail-fast
+          - name: clippy
+            command: cargo clippy --locked -p codex-core --all-targets
+          # The two jobs above only ever compile codex-core as a library. None
+          # of the shipped executables live there — `codex` is in codex-rs/cli —
+          # so without this a change that breaks a caller would pass the gate
+          # and only surface at release time. Debug profile: this is a link
+          # check, not an artifact.
+          - name: build
+            command: >-
+              cargo build --locked
+              --bin codex
+              --bin codex-app-server
+              --bin codex-code-mode-host
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_TERM_COLOR: always
+      # Required by this workspace, not a tuning knob. `cargo test` runs each
+      # test on a spawned thread with Rust's 2 MiB default, and several
+      # codex-core tests overflow that. Upstream sets the same 8 MiB in
+      # rust-ci.yml, rust-ci-full.yml, the nextest platform workflow, and
+      # .bazelrc; the justfile sets it for local runs.
+      RUST_MIN_STACK: "8388608" # 8 MiB
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # codex-rs plus its dependency tree does not comfortably fit alongside the
+      # runner's preinstalled SDKs. Dropping the ones no Rust build touches buys
+      # roughly 20 GB.
+      - name: Reclaim runner disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /usr/local/share/powershell
+          df -h /
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+          components: clippy
+
+      - name: Cache Cargo registry
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-pwragent-ci-${{ hashFiles('codex-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-pwragent-ci-
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      # codex-rs/.config/nextest.toml is the workspace's real test contract:
+      # retries, slow-timeout, and the max-threads groups for tests that cannot
+      # run concurrently. `cargo test` ignores all of it and shares one process
+      # across tests, which is how global tracing-subscriber state leaked
+      # between them. The justfile's own guidance is to install it this way.
+      - name: Cache cargo-nextest
+        if: matrix.name == 'test'
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cargo/bin/cargo-nextest
+          key: cargo-nextest-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cargo-nextest
+        if: matrix.name == 'test'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v cargo-nextest >/dev/null 2>&1; then
+            cargo install --locked cargo-nextest
+          fi
+          cargo nextest --version
+
+      - name: ${{ matrix.name }}
+        working-directory: codex-rs
+        shell: bash
+        run: ${{ matrix.command }}
