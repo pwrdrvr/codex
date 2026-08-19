@@ -7,7 +7,9 @@ mod telemetry;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -81,6 +83,11 @@ pub(crate) struct CodeModeService {
     max_output_tokens_ceiling: Option<usize>,
     /// Optional out-of-process reducer applied at the script-to-model boundary.
     output_reducer: Option<Arc<dyn CodeModeOutputReducer>>,
+    /// Script source per live cell, so a reduction can tell the host what
+    /// produced the output it is summarizing. `wait` resumes a cell it did not
+    /// start, so the source has to outlive the `exec` call that carried it.
+    /// Only populated when a reducer is configured.
+    cell_scripts: Mutex<HashMap<CellId, Arc<str>>>,
     shutting_down: AtomicBool,
     unavailable_warning_emitted: AtomicBool,
 }
@@ -105,6 +112,7 @@ impl CodeModeService {
             default_exec_yield_time_ms: config.default_exec_yield_time_ms,
             max_output_tokens_ceiling: config.max_output_tokens_ceiling,
             output_reducer,
+            cell_scripts: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             unavailable_warning_emitted: AtomicBool::new(false),
         }
@@ -120,6 +128,31 @@ impl CodeModeService {
 
     fn max_output_tokens_ceiling(&self) -> Option<usize> {
         self.max_output_tokens_ceiling
+    }
+
+    /// Remembers what a cell is running so the reducer can be told. Skipped
+    /// entirely when no reducer is configured, so the default path allocates
+    /// nothing.
+    pub(crate) fn record_cell_script(&self, cell_id: &CellId, source: &str) {
+        if self.output_reducer.is_none() {
+            return;
+        }
+        if let Ok(mut scripts) = self.cell_scripts.lock() {
+            scripts.insert(cell_id.clone(), Arc::from(source));
+        }
+    }
+
+    /// Reads the script for a cell, removing it once the cell can produce no
+    /// more output. A cell that errors before reaching `handle_runtime_response`
+    /// leaves its entry behind until the session ends; the entry is one script
+    /// source, and `interrupt_active_cells` clears the map wholesale.
+    fn cell_script(&self, cell_id: &CellId, take: bool) -> Option<Arc<str>> {
+        let mut scripts = self.cell_scripts.lock().ok()?;
+        if take {
+            scripts.remove(cell_id)
+        } else {
+            scripts.get(cell_id).cloned()
+        }
     }
 
     pub(crate) fn take_unavailable_warning(&self, tool_mode: ToolMode) -> Option<String> {
@@ -167,6 +200,9 @@ impl CodeModeService {
     }
 
     pub(crate) async fn interrupt_active_cells(&self) {
+        if let Ok(mut scripts) = self.cell_scripts.lock() {
+            scripts.clear();
+        }
         let Some(session) = self.session.get() else {
             return;
         };
@@ -262,13 +298,24 @@ pub(super) async fn handle_runtime_response(
     started_at: std::time::Instant,
 ) -> Result<FunctionToolOutput, String> {
     let script_status = format_script_status(&response);
+    let cell_id = response_cell_id(&response);
+    // A yielded cell can produce more output, so keep its script; anything else
+    // is finished with it.
+    let is_terminal = !matches!(response, RuntimeResponse::Yielded { .. });
+    let service = &exec.session.services.code_mode_service;
     // The script-to-model boundary: everything below is what enters model context, as opposed to
     // the nested-tool result in `call_nested_tool`, which is returned into the running script.
     let context = ReductionContext {
         thread_id: exec.session.thread_id.to_string(),
         turn_id: exec.turn.sub_id.clone(),
         call_id: call_id.to_string(),
-        cell_id: response_cell_id(&response),
+        // Summarizing a wall of text is guesswork without knowing it came from,
+        // say, a `rg --files` invocation, so hand the reducer the program that
+        // produced it.
+        script: service
+            .cell_script(&cell_id, is_terminal)
+            .map(|script| script.to_string()),
+        cell_id,
         script_status: script_status.clone(),
     };
 

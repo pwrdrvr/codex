@@ -49,6 +49,7 @@ fn context() -> ReductionContext {
         turn_id: "turn-1".to_string(),
         call_id: "call-1".to_string(),
         cell_id: "cell-1".to_string(),
+        script: Some("await tools.exec_command({ cmd: 'rg --files' })".to_string()),
         script_status: "Script completed".to_string(),
     }
 }
@@ -190,11 +191,52 @@ async fn reduction_request_carries_the_full_original_and_its_identifiers() {
     assert_eq!(body["call_id"], json!("call-1"));
     assert_eq!(body["cell_id"], json!("cell-1"));
     assert_eq!(body["script_status"], json!("Script completed"));
+    // The reducer needs to know what produced the output to summarize it well.
+    assert_eq!(
+        body["script"],
+        json!("await tools.exec_command({ cmd: 'rg --files' })")
+    );
     // The default budget, resolved host-side, so the reducer knows what it is aiming at.
     assert_eq!(body["max_output_tokens"], json!(10_000));
     assert_eq!(
         body["content_items"],
         serde_json::to_value(&original).expect("serialize original")
+    );
+}
+
+/// A cell whose script is no longer known omits the field rather than sending
+/// an empty string, so a host can tell the two apart.
+#[tokio::test]
+async fn reduction_request_omits_an_unknown_script() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": [{ "type": "input_text", "text": "summary" }]
+        })))
+        .mount(&harness.server)
+        .await;
+
+    let mut context = context();
+    context.script = None;
+    apply_output_reduction(
+        Some(&harness.reducer),
+        &context,
+        large_original(),
+        None,
+        None,
+    )
+    .await;
+
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    let body: JsonValue = serde_json::from_slice(&requests[0].body).expect("parse request body");
+    assert!(
+        body.get("script").is_none(),
+        "an unknown script must be omitted, got: {body}"
     );
 }
 
