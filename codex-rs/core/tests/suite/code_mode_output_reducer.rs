@@ -115,6 +115,21 @@ async fn run_turn_and_read_model_visible_output(
     Ok(model_visible_tool_output(&follow_up.single_request().body_json()))
 }
 
+/// Flattens a tool output, which is a bare string on the error path but an
+/// array of content items when code mode actually ran.
+fn output_text(output: &Value) -> String {
+    match output {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item["text"].as_str())
+            .collect::<Vec<_>>()
+            .join(""),
+        Value::Object(_) => output_text(&output["content"]),
+        other => other.to_string(),
+    }
+}
+
 /// Pulls out only the `custom_tool_call_output` for `call-1`.
 ///
 /// Asserting on the whole serialized request looks robust and is not: the
@@ -129,13 +144,17 @@ fn model_visible_tool_output(body: &Value) -> String {
         .filter(|item| {
             item["type"] == "custom_tool_call_output" && item["call_id"] == "call-1"
         })
-        .map(|item| item["output"].as_str().unwrap_or_default().to_string())
+        .map(|item| output_text(&item["output"]))
         .collect();
     assert!(
         !outputs.is_empty(),
         "no tool output for call-1 in: {body}"
     );
     let joined = outputs.concat();
+    assert!(
+        !joined.is_empty(),
+        "tool output was present but extracted empty, so the shape changed: {body}"
+    );
     // Usually means codex-code-mode-host was not built, so
     // CodeModeSessionProvider::availability failed and code mode fell back to
     // direct tools. Fail loudly: a session where the seam was never reached
