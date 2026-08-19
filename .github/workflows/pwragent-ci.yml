@@ -49,7 +49,7 @@ jobs:
           # satisfy the manifests, which is the check a hand-edited lockfile
           # needs and that a plain build would silently paper over.
           - name: test
-            command: cargo test --locked -p codex-core --lib
+            command: cargo nextest run --locked -p codex-core --lib --no-fail-fast
           - name: clippy
             command: cargo clippy --locked -p codex-core --all-targets
     env:
@@ -99,6 +99,28 @@ jobs:
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: x86_64-unknown-linux-gnu
+
+      # codex-rs/.config/nextest.toml is the workspace's real test contract:
+      # retries, slow-timeout, and the max-threads groups for tests that cannot
+      # run concurrently. `cargo test` ignores all of it and shares one process
+      # across tests, which is how global tracing-subscriber state leaked
+      # between them. The justfile's own guidance is to install it this way.
+      - name: Cache cargo-nextest
+        if: matrix.name == 'test'
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cargo/bin/cargo-nextest
+          key: cargo-nextest-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cargo-nextest
+        if: matrix.name == 'test'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v cargo-nextest >/dev/null 2>&1; then
+            cargo install --locked cargo-nextest
+          fi
+          cargo nextest --version
 
       - name: ${{ matrix.name }}
         working-directory: codex-rs
