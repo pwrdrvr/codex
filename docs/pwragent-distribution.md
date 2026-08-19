@@ -121,6 +121,37 @@ Without the label, `pwragent-release.yml` does not build at all — only
 `pwragent-release-check.yml` runs, which validates the contract and the pinned
 TrustedSigning client without secrets.
 
+### Testing a build on an Apple Silicon Mac
+
+Apply the **`ci:macos-unsigned`** label to get an `unsigned-macos-aarch64`
+artifact on the run. That is a single `macos-15` job in
+`pwragent-macos-unsigned.yml` — no signing, no secrets, no other platforms.
+Removing and re-adding the label reruns it; pushes to a labeled PR refresh the
+artifact.
+
+The workflow is separate from `pwragent-release.yml` on purpose. The release
+pipeline is fail-closed and `check-release-signing.py` pins that property, so an
+unsigned output does not belong inside it.
+
+Budget around two hours on a cold cache — standard hosted macOS is a 3-core M1.
+It shares its cache key with the release workflow's `macos-aarch64` leg (same
+target, same profile, same binaries), so whichever ran last leaves a warm
+`codex-rs/target` for the other.
+
+Download, unpack, and clear quarantine — the binaries are neither signed nor
+notarized, so Gatekeeper refuses them until you do:
+
+```bash
+tar -xzf pwragent-codex-*-macos-aarch64-unsigned.tar.gz
+```
+
+```bash
+xattr -dr com.apple.quarantine codex codex-app-server codex-code-mode-host
+```
+
+`PWRAGENT-BUILD.txt` in the tarball records `signed=no` alongside the source
+commit. These builds are for smoke-testing only and must never be shipped.
+
 ### Manually (`workflow_dispatch`)
 
 A manual run builds every platform but enters no signing environment. It emits

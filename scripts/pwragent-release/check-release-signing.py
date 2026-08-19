@@ -15,6 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-release.yml"
 CHECK_WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-release-check.yml"
+UNSIGNED_WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-macos-unsigned.yml"
 WINDOWS_SIGNER_PATH = ROOT / "scripts/pwragent-release/sign-windows-binaries.ps1"
 WINDOWS_SIGNING_PREPARER_PATH = (
     ROOT / "scripts/pwragent-release/prepare-trusted-signing.ps1"
@@ -56,6 +57,7 @@ def job(workflow: str, name: str) -> str:
 
 workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 check_workflow = CHECK_WORKFLOW_PATH.read_text(encoding="utf-8")
+unsigned_workflow = UNSIGNED_WORKFLOW_PATH.read_text(encoding="utf-8")
 windows_signer = WINDOWS_SIGNER_PATH.read_text(encoding="utf-8")
 windows_signing_preparer = WINDOWS_SIGNING_PREPARER_PATH.read_text(encoding="utf-8")
 windows_signing_verifier = WINDOWS_SIGNING_VERIFIER_PATH.read_text(encoding="utf-8")
@@ -249,6 +251,28 @@ for fragment in (
 
 if "environment:" in check_workflow or "secrets." in check_workflow:
     fail("release signing check workflow must not enter an environment or read secrets")
+
+# The `ci:macos-unsigned` workflow exists so that testing a build on an Apple
+# Silicon Mac does not require relaxing anything above. That only holds while it
+# stays a plain unsigned build: it must not reach for credentials, and it must
+# not publish. Comments are stripped so its header can describe what it avoids.
+unsigned_workflow_code = "\n".join(
+    line
+    for line in unsigned_workflow.splitlines()
+    if not line.lstrip().startswith("#")
+)
+if "environment:" in unsigned_workflow_code or "secrets." in unsigned_workflow_code:
+    fail("the unsigned macOS workflow must not enter an environment or read secrets")
+for fragment in ("softprops/action-gh-release", "gh release", "contents: write"):
+    if fragment in unsigned_workflow_code:
+        fail(f"the unsigned macOS workflow must not publish ({fragment!r})")
+for fragment in (
+    "'ci:macos-unsigned'",
+    "name: unsigned-macos-aarch64",
+    "signed=no",
+    "id-token: none",
+):
+    require(unsigned_workflow, fragment, "unsigned macOS workflow")
 
 for fragment in (
     "Developer ID Application: PwrDrvr LLC (T44CNHC4UH)",

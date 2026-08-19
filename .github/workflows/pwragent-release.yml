@@ -11,6 +11,11 @@
 #
 # To exercise the signing path on a pull request, apply the `ci:release-signing`
 # label. To publish, push a `pwragent-v*` tag.
+#
+# To just get a build onto an Apple Silicon Mac, do not use this workflow: apply
+# `ci:macos-unsigned` and let `pwragent-macos-unsigned.yml` produce an unsigned
+# arm64 artifact. Keeping that out of here is what lets this one stay
+# fail-closed.
 
 name: Build PwrAgent Codex distribution
 
