@@ -34,6 +34,7 @@ pub struct PostToolUseRequest {
     pub tool_use_id: String,
     pub tool_input: Value,
     pub tool_response: Value,
+    pub is_code_mode_nested: bool,
 }
 
 #[derive(Debug)]
@@ -163,6 +164,7 @@ fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json
         tool_input: request.tool_input.clone(),
         tool_response: request.tool_response.clone(),
         tool_use_id: request.tool_use_id.clone(),
+        is_code_mode_nested: request.is_code_mode_nested.then_some(true),
     })
 }
 
@@ -631,6 +633,25 @@ mod tests {
             tool_use_id: tool_use_id.to_string(),
             tool_input: json!({ "command": "echo hello" }),
             tool_response: json!({"ok": true}),
+            is_code_mode_nested: false,
         }
+    }
+
+    #[test]
+    fn command_input_marks_only_code_mode_nested_tool_calls() {
+        let direct = request_for_tool_use("tool-1");
+        let direct: serde_json::Value = serde_json::from_str(
+            &super::command_input_json(&direct).expect("serialize direct hook input"),
+        )
+        .expect("parse direct hook input");
+        assert_eq!(direct.get("is_code_mode_nested"), None);
+
+        let mut nested = request_for_tool_use("tool-2");
+        nested.is_code_mode_nested = true;
+        let nested: serde_json::Value = serde_json::from_str(
+            &super::command_input_json(&nested).expect("serialize nested hook input"),
+        )
+        .expect("parse nested hook input");
+        assert_eq!(nested.get("is_code_mode_nested"), Some(&json!(true)));
     }
 }
