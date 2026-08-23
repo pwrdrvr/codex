@@ -4137,18 +4137,16 @@ impl ThreadRequestProcessor {
             let needs_history = source_thread.is_some()
                 && !paginated_resume
                 && (include_turns || params.initial_turns_page.is_some());
-            if needs_history {
-                if let Some(thread) = source_thread.as_mut() {
-                    let source_thread_id = thread.thread_id.to_string();
-                    let source_rollout_path = thread.rollout_path.clone();
-                    *thread = self
-                        .read_stored_thread_for_resume(
-                            &source_thread_id,
-                            source_rollout_path.as_ref(),
-                            /*include_history*/ true,
-                        )
-                        .await?;
-                }
+            if needs_history && let Some(thread) = source_thread.as_mut() {
+                let source_thread_id = thread.thread_id.to_string();
+                let source_rollout_path = thread.rollout_path.clone();
+                *thread = self
+                    .read_stored_thread_for_resume(
+                        &source_thread_id,
+                        source_rollout_path.as_ref(),
+                        /*include_history*/ true,
+                    )
+                    .await?;
             }
             if paginated_resume && (include_turns || params.initial_turns_page.is_some()) {
                 self.thread_store
@@ -4156,10 +4154,8 @@ impl ThreadRequestProcessor {
                     .await
                     .map_err(thread_store_resume_read_error)?;
             }
-            let history_items = if needs_history {
-                source_thread
-                    .as_mut()
-                    .expect("source thread is present when history is needed")
+            let history_items = match (needs_history, source_thread.as_mut()) {
+                (true, Some(thread)) => thread
                     .history
                     .take()
                     .map(|history| history.items)
@@ -4167,9 +4163,13 @@ impl ThreadRequestProcessor {
                         internal_error(format!(
                             "thread {existing_thread_id} did not include persisted history"
                         ))
-                    })?
-            } else {
-                Vec::new()
+                    })?,
+                (true, None) => {
+                    return Err(internal_error(format!(
+                        "thread {existing_thread_id} is missing its resume source"
+                    )));
+                }
+                (false, _) => Vec::new(),
             };
 
             let thread_state = self
