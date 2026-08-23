@@ -5114,7 +5114,7 @@ async fn post_tool_use_selected_replacement_is_acknowledged_with_direct_identity
         .with_config(move |config| {
             trust_discovered_hooks(config);
             config.code_mode.output_reducer = Some(CodeModeOutputReducerConfig {
-                descriptor_path: descriptor_path_for_config.clone(),
+                descriptor_path: descriptor_path_for_config,
                 min_trigger_bytes: 1,
                 max_request_bytes: 1024 * 1024,
                 max_response_bytes: 64 * 1024,
@@ -5195,7 +5195,7 @@ async fn post_tool_use_unselected_response_id_keeps_original_without_acceptance(
         .with_config(move |config| {
             trust_discovered_hooks(config);
             config.code_mode.output_reducer = Some(CodeModeOutputReducerConfig {
-                descriptor_path: descriptor_path_for_config.clone(),
+                descriptor_path: descriptor_path_for_config,
                 min_trigger_bytes: 1,
                 max_request_bytes: 1024 * 1024,
                 max_response_bytes: 64 * 1024,
