@@ -73,6 +73,8 @@ mod guardian_review;
 mod hooks;
 #[cfg(not(target_os = "windows"))]
 mod hooks_mcp;
+#[cfg(not(target_os = "windows"))]
+mod hooks_post_tool_use_output;
 mod image_rollout;
 mod injected_models_cache;
 mod items;
