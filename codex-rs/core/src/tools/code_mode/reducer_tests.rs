@@ -30,6 +30,7 @@ use crate::config::CodeModeOutputReducerConfig;
 use crate::tools::code_mode::truncate_code_mode_result;
 
 const REDUCE_PATH: &str = "/v1/reduce-code-mode-output";
+const ACCEPT_PATH: &str = "/v1/accept-code-mode-output";
 const TOKEN: &str = "test-bridge-token";
 
 fn text(text: &str) -> FunctionCallOutputContentItem {
@@ -63,15 +64,25 @@ struct Harness {
 
 impl Harness {
     async fn start(timeout: Duration) -> Self {
+        Self::start_with_protocol(timeout, 1).await
+    }
+
+    async fn start_v2(timeout: Duration) -> Self {
+        Self::start_with_protocol(timeout, 2).await
+    }
+
+    async fn start_with_protocol(timeout: Duration, version: u32) -> Self {
         let server = MockServer::start().await;
         let descriptor_dir = TempDir::new().expect("create descriptor dir");
         let descriptor_path = descriptor_dir.path().join("bridge.json");
         std::fs::write(
             &descriptor_path,
             json!({
-                "version": 1,
+                "version": version,
                 "url": format!("{}{REDUCE_PATH}", server.uri()),
                 "token": TOKEN,
+                "acceptance_url": (version == 2)
+                    .then(|| format!("{}{ACCEPT_PATH}", server.uri())),
             })
             .to_string(),
         )
@@ -107,6 +118,84 @@ impl Harness {
         )
         .await
     }
+}
+
+#[tokio::test]
+async fn v2_acknowledges_the_accepted_replacement_with_stable_identity() {
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "gate-42",
+            "replacement": [{ "type": "input_text", "text": "accepted summary" }]
+        })))
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .and(header("authorization", format!("Bearer {TOKEN}").as_str()))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&harness.server)
+        .await;
+
+    let reduced = harness.reduce(large_original()).await;
+
+    assert_eq!(
+        reduced,
+        vec![
+            text(UNTRUSTED_REPLACEMENT_HEADER),
+            text("accepted summary"),
+            text(UNTRUSTED_REPLACEMENT_FOOTER),
+        ]
+    );
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    assert_eq!(requests.len(), 2);
+    let acceptance: JsonValue =
+        serde_json::from_slice(&requests[1].body).expect("parse acceptance body");
+    assert_eq!(
+        acceptance,
+        json!({
+            "version": 2,
+            "response_id": "gate-42",
+            "thread_id": "thread-1",
+            "turn_id": "turn-1",
+            "call_id": "call-1",
+            "cell_id": "cell-1",
+        })
+    );
+}
+
+#[tokio::test]
+async fn v2_acceptance_response_cannot_revoke_the_committed_replacement() {
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "gate-unconfirmed",
+            "replacement": [{ "type": "input_text", "text": "unconfirmed summary" }]
+        })))
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&harness.server)
+        .await;
+
+    let reduced = harness.reduce(large_original()).await;
+
+    assert_eq!(
+        reduced,
+        vec![
+            text(UNTRUSTED_REPLACEMENT_HEADER),
+            text("unconfirmed summary"),
+            text(UNTRUSTED_REPLACEMENT_FOOTER),
+        ]
+    );
 }
 
 /// The default path must be the pre-existing truncation, unchanged.
@@ -385,9 +474,15 @@ fn ceiling_clamps_the_model_supplied_budget() {
     assert_eq!(clamp_max_output_tokens(Some(200_000), None), Some(200_000));
     assert_eq!(clamp_max_output_tokens(None, None), None);
     // A ceiling binds an oversized request down.
-    assert_eq!(clamp_max_output_tokens(Some(200_000), Some(4_000)), Some(4_000));
+    assert_eq!(
+        clamp_max_output_tokens(Some(200_000), Some(4_000)),
+        Some(4_000)
+    );
     // ...and leaves a modest request alone.
-    assert_eq!(clamp_max_output_tokens(Some(1_000), Some(4_000)), Some(1_000));
+    assert_eq!(
+        clamp_max_output_tokens(Some(1_000), Some(4_000)),
+        Some(1_000)
+    );
     // ...and binds the built-in default too, so omitting the argument cannot evade it.
     assert_eq!(clamp_max_output_tokens(None, Some(4_000)), Some(4_000));
     assert_eq!(clamp_max_output_tokens(None, Some(20_000)), Some(10_000));

@@ -191,7 +191,11 @@ fn collect_resume_override_mismatches(
         ));
     }
 
-    if request.config.is_some() {
+    if request.config.as_ref().is_some_and(|config| {
+        !config
+            .iter()
+            .all(|(key, value)| is_code_mode_reduction_config_override(key, value))
+    }) {
         mismatch_details
             .push("config overrides were provided and ignored while running".to_string());
     }
@@ -205,6 +209,33 @@ fn collect_resume_override_mismatches(
         );
     }
     mismatch_details
+}
+
+fn is_code_mode_reduction_config_override(key: &str, value: &serde_json::Value) -> bool {
+    if key == "features.code_mode" {
+        return value.as_object().is_some_and(|table| {
+            table.keys().all(|field| {
+                matches!(
+                    field.as_str(),
+                    "max_output_tokens_ceiling" | "output_reducer"
+                )
+            })
+        });
+    }
+    matches!(
+        key,
+        "features.code_mode.max_output_tokens_ceiling" | "features.code_mode.output_reducer"
+    ) || key.starts_with("features.code_mode.output_reducer.")
+}
+
+fn has_code_mode_reduction_config_override(
+    config: Option<&HashMap<String, serde_json::Value>>,
+) -> bool {
+    config.is_some_and(|config| {
+        config
+            .iter()
+            .any(|(key, value)| is_code_mode_reduction_config_override(key, value))
+    })
 }
 
 fn merge_persisted_resume_metadata(
@@ -4004,6 +4035,20 @@ impl ThreadRequestProcessor {
                 )));
             }
             let config_snapshot = existing_thread.config_snapshot().await;
+            if has_code_mode_reduction_config_override(params.config.as_ref()) {
+                let next_config = self
+                    .config_manager
+                    .load_for_cwd(
+                        params.config.clone(),
+                        ConfigOverrides::default(),
+                        Some(config_snapshot.cwd().to_path_buf()),
+                    )
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                existing_thread
+                    .refresh_code_mode_reduction_config(&next_config)
+                    .await;
+            }
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self

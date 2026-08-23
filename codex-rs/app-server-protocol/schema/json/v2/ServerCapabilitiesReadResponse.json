@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "CodeModeOutputReducerAcceptanceCapability": {
+      "properties": {
+        "callbackVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "descriptorUrlField": {
+          "type": "string"
+        },
+        "responseIdField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "callbackVersion",
+        "descriptorUrlField",
+        "responseIdField"
+      ],
+      "type": "object"
+    },
+    "CodeModeOutputReducerCapability": {
+      "properties": {
+        "acceptance": {
+          "$ref": "#/definitions/CodeModeOutputReducerAcceptanceCapability"
+        },
+        "configKey": {
+          "type": "string"
+        },
+        "maxOutputTokensCeilingConfigKey": {
+          "type": "string"
+        },
+        "postToolUseNestedContextField": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "supportsThreadResumeOverrides": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "acceptance",
+        "configKey",
+        "maxOutputTokensCeilingConfigKey",
+        "postToolUseNestedContextField",
+        "protocolVersion",
+        "supportsThreadResumeOverrides"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "codeModeOutputReducer": {
+      "$ref": "#/definitions/CodeModeOutputReducerCapability"
+    }
+  },
+  "required": [
+    "codeModeOutputReducer"
+  ],
+  "title": "ServerCapabilitiesReadResponse",
+  "type": "object"
+}

@@ -1427,6 +1427,31 @@
           "type": "object"
         },
         {
+          "description": "Read stable app-server extension capabilities implemented by this binary.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "server/capabilities/read"
+              ],
+              "title": "Server/capabilities/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ServerCapabilitiesReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Server/capabilities/readRequest",
+          "type": "object"
+        },
+        {
           "description": "NEW APIs",
           "properties": {
             "id": {
@@ -3689,6 +3714,60 @@
         }
       ],
       "title": "ClientRequest"
+    },
+    "CodeModeOutputReducerAcceptanceCapability": {
+      "properties": {
+        "callbackVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "descriptorUrlField": {
+          "type": "string"
+        },
+        "responseIdField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "callbackVersion",
+        "descriptorUrlField",
+        "responseIdField"
+      ],
+      "type": "object"
+    },
+    "CodeModeOutputReducerCapability": {
+      "properties": {
+        "acceptance": {
+          "$ref": "#/definitions/CodeModeOutputReducerAcceptanceCapability"
+        },
+        "configKey": {
+          "type": "string"
+        },
+        "maxOutputTokensCeilingConfigKey": {
+          "type": "string"
+        },
+        "postToolUseNestedContextField": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "supportsThreadResumeOverrides": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "acceptance",
+        "configKey",
+        "maxOutputTokensCeilingConfigKey",
+        "postToolUseNestedContextField",
+        "protocolVersion",
+        "supportsThreadResumeOverrides"
+      ],
+      "type": "object"
     },
     "CodexErrorInfo": {
       "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
@@ -14463,6 +14542,24 @@
         "status"
       ],
       "title": "SendAddCreditsNudgeEmailResponse",
+      "type": "object"
+    },
+    "ServerCapabilitiesReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ServerCapabilitiesReadParams",
+      "type": "object"
+    },
+    "ServerCapabilitiesReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "codeModeOutputReducer": {
+          "$ref": "#/definitions/CodeModeOutputReducerCapability"
+        }
+      },
+      "required": [
+        "codeModeOutputReducer"
+      ],
+      "title": "ServerCapabilitiesReadResponse",
       "type": "object"
     },
     "ServerDiagnosticsGauge": {

@@ -699,6 +699,13 @@ impl CodexThread {
         self.session.refresh_runtime_config(next_config).await;
     }
 
+    /// Refresh only the Code Mode output reducer and token ceiling for a loaded thread.
+    pub async fn refresh_code_mode_reduction_config(&self, next_config: &crate::config::Config) {
+        self.session
+            .refresh_code_mode_reduction_config(next_config)
+            .await;
+    }
+
     /// Refresh MCP configuration and managed requirements without reloading unrelated settings.
     pub async fn refresh_mcp_config(&self, next_config: crate::config::Config) {
         self.session.refresh_mcp_config(next_config).await;

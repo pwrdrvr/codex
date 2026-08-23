@@ -15,9 +15,9 @@
 //!
 //! - **Inert by default.** With no reducer and no ceiling configured, [`apply_output_reduction`]
 //!   is the existing truncation call, byte for byte.
-//! - **Fails open, always.** Missing descriptor, unreachable host, timeout, non-2xx, malformed
-//!   body, oversized body, empty replacement — every one of them falls back to truncation. A
-//!   code-mode turn never fails because the reducer is down.
+//! - **Fails open during reduction.** Missing descriptor, unreachable host, timeout, non-2xx,
+//!   malformed body, oversized body, empty replacement — every one falls back to truncation. Once
+//!   a valid v2 replacement is committed, its acceptance callback response cannot revoke it.
 //! - **Budget always enforced.** The replacement is truncated with the same policy as the
 //!   original, so a reducer cannot enlarge what reaches the model.
 //! - **Replacement is untrusted.** See [`UNTRUSTED_REPLACEMENT_HEADER`].
@@ -36,7 +36,8 @@ use crate::config::CodeModeOutputReducerConfig;
 use crate::unified_exec::resolve_max_tokens;
 
 /// Wire version for both the descriptor file and the reduction request/response envelopes.
-const REDUCER_PROTOCOL_VERSION: u32 = 1;
+const REDUCER_PROTOCOL_VERSION: u32 = 2;
+const LEGACY_REDUCER_PROTOCOL_VERSION: u32 = 1;
 
 /// Prepended to every replacement before it enters the parent model's context.
 ///
@@ -144,6 +145,8 @@ struct ReducerDescriptor {
     version: u32,
     url: String,
     token: String,
+    #[serde(default)]
+    acceptance_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,6 +163,19 @@ struct ReductionResponse {
     /// `null` or absent means "no replacement"; the caller keeps the original.
     #[serde(default)]
     replacement: Option<Vec<FunctionCallOutputContentItem>>,
+    /// Stable host identity for this staged gate. Required by protocol v2.
+    #[serde(default)]
+    response_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReductionAcceptance<'a> {
+    version: u32,
+    response_id: &'a str,
+    thread_id: &'a str,
+    turn_id: &'a str,
+    call_id: &'a str,
+    cell_id: &'a str,
 }
 
 /// Loopback HTTP reducer.
@@ -212,15 +228,16 @@ impl HttpCodeModeOutputReducer {
 
         let descriptor = read_descriptor(&self.config.descriptor_path).await?;
         let request = ReductionRequest {
-            version: REDUCER_PROTOCOL_VERSION,
+            version: descriptor.version,
             context,
             max_output_tokens,
             content_items: items,
         };
 
-        // One budget for the whole round-trip: connect, send, and read the body. Splitting it per
+        // One budget for reduction plus the optional v2 acceptance callback. Splitting it per
         // stage would let a slow reducer spend the timeout more than once.
-        let body = tokio::time::timeout(self.config.timeout, async {
+        let deadline = tokio::time::Instant::now() + self.config.timeout;
+        let body = tokio::time::timeout_at(deadline, async {
             let response = self
                 .client
                 .post(&descriptor.url)
@@ -284,6 +301,59 @@ impl HttpCodeModeOutputReducer {
             tracing::warn!("code-mode output reducer returned an empty replacement");
             return None;
         }
+        if descriptor.version == REDUCER_PROTOCOL_VERSION {
+            let response_id = parsed
+                .response_id
+                .as_deref()
+                .and_then(|response_id| (!response_id.trim().is_empty()).then_some(response_id))
+                .or_else(|| {
+                    tracing::warn!(
+                        "code-mode output reducer v2 response omitted a non-empty response_id"
+                    );
+                    None
+                })?;
+            let acceptance_url = descriptor.acceptance_url.as_deref()?;
+            let acceptance = ReductionAcceptance {
+                version: REDUCER_PROTOCOL_VERSION,
+                response_id,
+                thread_id: &context.thread_id,
+                turn_id: &context.turn_id,
+                call_id: &context.call_id,
+                cell_id: &context.cell_id,
+            };
+            // This is a one-way commit notification. Once the request is attempted, Codex must
+            // keep the replacement even if the response is lost: the host may already have
+            // received the callback and finalized its staged gate.
+            let callback_result = tokio::time::timeout_at(deadline, async {
+                let response = self.client
+                    .post(acceptance_url)
+                    .bearer_auth(&descriptor.token)
+                    .json(&acceptance)
+                    .send()
+                    .await
+                    .inspect_err(|error| {
+                        tracing::warn!(%error, "code-mode output reducer acceptance callback failed");
+                    })
+                    .ok()?;
+                Some(response.status())
+            })
+            .await;
+            match callback_result {
+                Ok(Some(status)) if status.is_success() => {}
+                Ok(Some(status)) => tracing::warn!(
+                    %status,
+                    response_id,
+                    "code-mode output reducer acceptance callback returned an error status"
+                ),
+                Ok(None) => {}
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        timeout = ?self.config.timeout,
+                        "code-mode output reducer acceptance callback timed out"
+                    );
+                }
+            }
+        }
         Some(replacement)
     }
 }
@@ -316,12 +386,19 @@ async fn read_descriptor(path: &Path) -> Option<ReducerDescriptor> {
             tracing::warn!(%error, "code-mode output reducer descriptor is malformed");
         })
         .ok()?;
-    if descriptor.version != REDUCER_PROTOCOL_VERSION {
+    if !matches!(
+        descriptor.version,
+        LEGACY_REDUCER_PROTOCOL_VERSION | REDUCER_PROTOCOL_VERSION
+    ) {
         tracing::warn!(
             version = descriptor.version,
             expected = REDUCER_PROTOCOL_VERSION,
             "code-mode output reducer descriptor version is unsupported"
         );
+        return None;
+    }
+    if descriptor.version == REDUCER_PROTOCOL_VERSION && descriptor.acceptance_url.is_none() {
+        tracing::warn!("code-mode output reducer v2 descriptor omitted acceptance_url");
         return None;
     }
     Some(descriptor)
