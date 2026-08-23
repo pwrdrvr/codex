@@ -23,6 +23,10 @@
       "const": "PostToolUse",
       "type": "string"
     },
+    "is_code_mode_nested": {
+      "description": "Codex extension: true when Code Mode issued this nested tool call.",
+      "type": "boolean"
+    },
     "model": {
       "type": "string"
     },

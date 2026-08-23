@@ -335,6 +335,9 @@ pub(crate) struct PostToolUseCommandInput {
     pub tool_input: Value,
     pub tool_response: Value,
     pub tool_use_id: String,
+    /// Codex extension: true when Code Mode issued this nested tool call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_code_mode_nested: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

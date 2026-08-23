@@ -4045,6 +4045,7 @@ try {{
     let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs[0]["is_code_mode_nested"], true);
     assert_eq!(
         hook_inputs[0]["tool_response"],
         Value::String("original-post-tool-result".to_string())
@@ -4883,6 +4884,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs[0].get("is_code_mode_nested"), None);
     assert_eq!(
         hook_inputs[0]["tool_response"],
         Value::String("post-tool-output".to_string())

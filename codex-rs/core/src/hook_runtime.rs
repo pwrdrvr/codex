@@ -50,6 +50,7 @@ use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
@@ -268,12 +269,10 @@ pub(crate) async fn run_permission_request_hooks(
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    tool_use_id: String,
-    tool_name: String,
-    matcher_aliases: Vec<String>,
-    tool_input: Value,
-    tool_response: Value,
+    payload: PostToolUsePayload,
+    is_code_mode_nested: bool,
 ) -> PostToolUseOutcome {
+    let matcher_aliases = payload.tool_name.matcher_aliases().to_vec();
     let request = PostToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -283,11 +282,12 @@ pub(crate) async fn run_post_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name,
+        tool_name: payload.tool_name.name().to_string(),
         matcher_aliases,
-        tool_use_id,
-        tool_input,
-        tool_response,
+        tool_use_id: payload.tool_use_id,
+        tool_input: payload.tool_input,
+        tool_response: payload.tool_response,
+        is_code_mode_nested,
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_post_tool_use(&request);
