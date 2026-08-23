@@ -49,12 +49,13 @@ pub struct CodeModeConfigToml {
 /// Configures the optional external code-mode output reducer.
 ///
 /// The reducer is contacted from the Codex process (which is not sandboxed) over loopback HTTP,
-/// using a descriptor file the host writes with mode `0600`. Every failure mode falls back to the
+/// using a descriptor file the host writes with mode `0600`. Reduction failures fall back to the
 /// built-in truncation, so a missing or wedged reducer never fails a turn.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CodeModeOutputReducerToml {
-    /// Path to the host-written descriptor JSON: `{"version":1,"url":...,"token":...}`.
+    /// Path to the host-written descriptor JSON. Protocol v2 uses
+    /// `{"version":2,"url":...,"acceptance_url":...,"token":...}`.
     ///
     /// Read on every reduction so the host can restart and rotate its token without a Codex
     /// restart. The reducer stays inert while this is unset or the file is missing.
@@ -69,7 +70,7 @@ pub struct CodeModeOutputReducerToml {
     /// Discard reducer responses larger than this many bytes and fall back to truncation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_response_bytes: Option<usize>,
-    /// Total budget for the reduction round-trip, in milliseconds.
+    /// Total budget for reduction and the v2 acceptance callback, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
 }

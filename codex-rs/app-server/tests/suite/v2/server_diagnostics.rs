@@ -7,9 +7,13 @@ use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CodeModeOutputReducerAcceptanceCapability;
+use codex_app_server_protocol::CodeModeOutputReducerCapability;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerCapabilitiesReadParams;
+use codex_app_server_protocol::ServerCapabilitiesReadResponse;
 use codex_app_server_protocol::ServerDiagnosticsGauge;
 use codex_app_server_protocol::ServerDiagnosticsParams;
 use codex_app_server_protocol::ServerDiagnosticsResponse;
@@ -20,6 +24,43 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
+
+#[tokio::test]
+async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(READ_TIMEOUT)
+        .await?;
+
+    let capabilities: ServerCapabilitiesReadResponse = app_server
+        .request(|request_id| ClientRequest::ServerCapabilitiesRead {
+            request_id,
+            params: ServerCapabilitiesReadParams::default(),
+        })
+        .await?;
+
+    assert_eq!(
+        capabilities,
+        ServerCapabilitiesReadResponse {
+            code_mode_output_reducer: CodeModeOutputReducerCapability {
+                protocol_version: 2,
+                config_key: "features.code_mode.output_reducer".to_string(),
+                max_output_tokens_ceiling_config_key:
+                    "features.code_mode.max_output_tokens_ceiling".to_string(),
+                post_tool_use_nested_context_field: "is_code_mode_nested".to_string(),
+                supports_thread_resume_overrides: true,
+                acceptance: CodeModeOutputReducerAcceptanceCapability {
+                    descriptor_url_field: "acceptance_url".to_string(),
+                    response_id_field: "response_id".to_string(),
+                    callback_version: 2,
+                },
+            },
+        }
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn server_diagnostics_exposes_process_and_registered_thread_gauge() -> Result<()> {
