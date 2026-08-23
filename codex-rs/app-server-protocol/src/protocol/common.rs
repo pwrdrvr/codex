@@ -499,6 +499,13 @@ client_request_definitions! {
         response: v2::ServerDiagnosticsResponse,
     },
 
+    /// Read stable app-server extension capabilities implemented by this binary.
+    ServerCapabilitiesRead => "server/capabilities/read" {
+        params: v2::ServerCapabilitiesReadParams,
+        serialization: None,
+        response: v2::ServerCapabilitiesReadResponse,
+    },
+
     /// NEW APIs
     // Thread lifecycle
     // Uses `inspect_params` because only some fields are experimental.

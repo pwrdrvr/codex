@@ -10,6 +10,7 @@ pub(crate) mod wait_spec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -79,10 +80,8 @@ pub(crate) struct CodeModeService {
     availability: Result<(), String>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
     default_exec_yield_time_ms: u64,
-    /// Host-side clamp on the model-supplied code-mode output budget.
-    max_output_tokens_ceiling: Option<usize>,
-    /// Optional out-of-process reducer applied at the script-to-model boundary.
-    output_reducer: Option<Arc<dyn CodeModeOutputReducer>>,
+    /// Runtime-refreshable settings for the script-to-model reduction boundary.
+    reduction_config: RwLock<CodeModeReductionRuntimeConfig>,
     /// Script source per live cell, so a reduction can tell the host what
     /// produced the output it is summarizing. `wait` resumes a cell it did not
     /// start, so the source has to outlive the `exec` call that carried it.
@@ -92,6 +91,26 @@ pub(crate) struct CodeModeService {
     unavailable_warning_emitted: AtomicBool,
 }
 
+#[derive(Clone, Default)]
+struct CodeModeReductionRuntimeConfig {
+    max_output_tokens_ceiling: Option<usize>,
+    output_reducer: Option<Arc<dyn CodeModeOutputReducer>>,
+}
+
+impl CodeModeReductionRuntimeConfig {
+    fn from_config(config: &CodeModeConfig) -> Self {
+        let output_reducer = config
+            .output_reducer
+            .clone()
+            .and_then(HttpCodeModeOutputReducer::new)
+            .map(|reducer| Arc::new(reducer) as Arc<dyn CodeModeOutputReducer>);
+        Self {
+            max_output_tokens_ceiling: config.max_output_tokens_ceiling,
+            output_reducer,
+        }
+    }
+}
+
 impl CodeModeService {
     pub(crate) fn new(
         session_provider: Arc<dyn CodeModeSessionProvider>,
@@ -99,19 +118,13 @@ impl CodeModeService {
     ) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         let availability = session_provider.availability();
-        let output_reducer = config
-            .output_reducer
-            .clone()
-            .and_then(HttpCodeModeOutputReducer::new)
-            .map(|reducer| Arc::new(reducer) as Arc<dyn CodeModeOutputReducer>);
         Self {
             session: OnceCell::new(),
             session_provider,
             availability,
             dispatch_broker,
             default_exec_yield_time_ms: config.default_exec_yield_time_ms,
-            max_output_tokens_ceiling: config.max_output_tokens_ceiling,
-            output_reducer,
+            reduction_config: RwLock::new(CodeModeReductionRuntimeConfig::from_config(config)),
             cell_scripts: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             unavailable_warning_emitted: AtomicBool::new(false),
@@ -122,19 +135,31 @@ impl CodeModeService {
         self.availability.is_ok()
     }
 
-    fn output_reducer(&self) -> Option<&Arc<dyn CodeModeOutputReducer>> {
-        self.output_reducer.as_ref()
+    fn reduction_config(&self) -> CodeModeReductionRuntimeConfig {
+        self.reduction_config
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
-    fn max_output_tokens_ceiling(&self) -> Option<usize> {
-        self.max_output_tokens_ceiling
+    pub(crate) fn refresh_reduction_config(&self, config: &CodeModeConfig) {
+        let next = CodeModeReductionRuntimeConfig::from_config(config);
+        if next.output_reducer.is_none()
+            && let Ok(mut scripts) = self.cell_scripts.lock()
+        {
+            scripts.clear();
+        }
+        *self
+            .reduction_config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
     }
 
     /// Remembers what a cell is running so the reducer can be told. Skipped
     /// entirely when no reducer is configured, so the default path allocates
     /// nothing.
     pub(crate) fn record_cell_script(&self, cell_id: &CellId, source: &str) {
-        if self.output_reducer.is_none() {
+        if self.reduction_config().output_reducer.is_none() {
             return;
         }
         if let Ok(mut scripts) = self.cell_scripts.lock() {
@@ -375,12 +400,13 @@ async fn reduce_code_mode_result(
     max_output_tokens: Option<usize>,
 ) -> Vec<FunctionCallOutputContentItem> {
     let service = &exec.session.services.code_mode_service;
+    let reduction_config = service.reduction_config();
     apply_output_reduction(
-        service.output_reducer(),
+        reduction_config.output_reducer.as_ref(),
         context,
         content_items,
         max_output_tokens,
-        service.max_output_tokens_ceiling(),
+        reduction_config.max_output_tokens_ceiling,
     )
     .await
 }
