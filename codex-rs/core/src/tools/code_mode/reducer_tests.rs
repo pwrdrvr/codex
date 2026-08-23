@@ -5,6 +5,8 @@
 //! exercise them. A green build is not evidence that this seam behaves; these are.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -14,6 +16,8 @@ use serde_json::json;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Request;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
@@ -21,6 +25,7 @@ use wiremock::matchers::path;
 
 use super::CodeModeOutputReducer;
 use super::HttpCodeModeOutputReducer;
+use super::PostToolUseAcceptanceContext;
 use super::ReductionContext;
 use super::UNTRUSTED_REPLACEMENT_FOOTER;
 use super::UNTRUSTED_REPLACEMENT_HEADER;
@@ -118,6 +123,63 @@ impl Harness {
         )
         .await
     }
+
+    async fn accept_post_tool_use(&self, response_id: &str) {
+        self.reducer
+            .accept_post_tool_use(PostToolUseAcceptanceContext {
+                response_id,
+                session_id: "session-1",
+                turn_id: "turn-1",
+                tool_use_id: "tool-1",
+            })
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn direct_post_tool_use_acceptance_uses_the_strict_v2_identity() {
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .and(header("authorization", format!("Bearer {TOKEN}").as_str()))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&harness.server)
+        .await;
+
+    harness.accept_post_tool_use("direct-gate-42").await;
+
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    let acceptance: JsonValue =
+        serde_json::from_slice(&requests[0].body).expect("parse acceptance body");
+    assert_eq!(
+        acceptance,
+        json!({
+            "version": 2,
+            "response_id": "direct-gate-42",
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "tool_use_id": "tool-1",
+        })
+    );
+}
+
+#[tokio::test]
+async fn direct_post_tool_use_acceptance_failure_is_best_effort() {
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&harness.server)
+        .await;
+
+    harness
+        .accept_post_tool_use("direct-gate-unconfirmed")
+        .await;
 }
 
 #[tokio::test]
@@ -166,6 +228,64 @@ async fn v2_acknowledges_the_accepted_replacement_with_stable_identity() {
             "call_id": "call-1",
             "cell_id": "cell-1",
         })
+    );
+}
+
+#[tokio::test]
+async fn v2_acceptance_retries_once_after_a_transient_failure() {
+    struct FailOnce {
+        calls: AtomicUsize,
+    }
+
+    impl Respond for FailOnce {
+        fn respond(&self, _request: &Request) -> ResponseTemplate {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(503)
+            } else {
+                ResponseTemplate::new(204)
+            }
+        }
+    }
+
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "gate-retry",
+            "replacement": [{ "type": "input_text", "text": "retry summary" }]
+        })))
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .respond_with(FailOnce {
+            calls: AtomicUsize::new(0),
+        })
+        .expect(2)
+        .mount(&harness.server)
+        .await;
+
+    let reduced = harness.reduce(large_original()).await;
+
+    assert_eq!(
+        reduced,
+        vec![
+            text(UNTRUSTED_REPLACEMENT_HEADER),
+            text("retry summary"),
+            text(UNTRUSTED_REPLACEMENT_FOOTER),
+        ]
+    );
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == ACCEPT_PATH)
+            .count(),
+        2
     );
 }
 

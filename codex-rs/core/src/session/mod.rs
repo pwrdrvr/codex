@@ -1760,6 +1760,10 @@ impl Session {
             .refresh_reduction_config(&reduction_config);
     }
 
+    pub(crate) async fn refresh_dynamic_tools(&self, dynamic_tools: Vec<DynamicToolSpec>) {
+        self.state.lock().await.session_configuration.dynamic_tools = dynamic_tools;
+    }
+
     pub(crate) async fn refresh_hooks(&self, config: Arc<Config>) {
         let environments = self.services.turn_environments.snapshot().await;
         let hooks_config = build_hooks_config(

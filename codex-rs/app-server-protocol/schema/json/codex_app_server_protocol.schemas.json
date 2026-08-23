@@ -7667,6 +7667,9 @@
           "descriptorUrlField": {
             "type": "string"
           },
+          "directPostToolUse": {
+            "$ref": "#/definitions/v2/DirectPostToolUseAcceptanceCapability"
+          },
           "responseIdField": {
             "type": "string"
           }
@@ -7674,6 +7677,7 @@
         "required": [
           "callbackVersion",
           "descriptorUrlField",
+          "directPostToolUse",
           "responseIdField"
         ],
         "type": "object"
@@ -7684,6 +7688,9 @@
             "$ref": "#/definitions/v2/CodeModeOutputReducerAcceptanceCapability"
           },
           "configKey": {
+            "type": "string"
+          },
+          "dynamicToolsResumeField": {
             "type": "string"
           },
           "maxOutputTokensCeilingConfigKey": {
@@ -7704,6 +7711,7 @@
         "required": [
           "acceptance",
           "configKey",
+          "dynamicToolsResumeField",
           "maxOutputTokensCeilingConfigKey",
           "postToolUseNestedContextField",
           "protocolVersion",
@@ -9746,6 +9754,39 @@
           "life_sciences"
         ],
         "type": "string"
+      },
+      "DirectPostToolUseAcceptanceCapability": {
+        "properties": {
+          "hookAcceptanceVersion": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "hookAcceptanceVersionField": {
+            "type": "string"
+          },
+          "hookResponseIdField": {
+            "type": "string"
+          },
+          "sessionIdField": {
+            "type": "string"
+          },
+          "toolUseIdField": {
+            "type": "string"
+          },
+          "turnIdField": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hookAcceptanceVersion",
+          "hookAcceptanceVersionField",
+          "hookResponseIdField",
+          "sessionIdField",
+          "toolUseIdField",
+          "turnIdField"
+        ],
+        "type": "object"
       },
       "DynamicToolCallOutputContentItem": {
         "oneOf": [

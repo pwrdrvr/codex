@@ -664,6 +664,7 @@ impl ToolRegistry {
             Ok((_, success)) => *success,
             Err(_) => false,
         };
+        let is_code_mode_nested = matches!(invocation.source, ToolCallSource::CodeMode { .. });
         emit_metric_for_tool_read(&invocation, success);
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
@@ -679,7 +680,7 @@ impl ToolRegistry {
                     &invocation.session,
                     &invocation.turn,
                     post_tool_use_payload,
-                    matches!(invocation.source, ToolCallSource::CodeMode { .. }),
+                    is_code_mode_nested,
                 )
                 .await,
             )
@@ -735,6 +736,7 @@ impl ToolRegistry {
                         return Err(err);
                     }
                     if let Some(feedback_message) = outcome.feedback_message {
+                        let replacement_response_ids = outcome.replacement_response_ids;
                         result.result = Box::new(PostToolUseFeedbackOutput {
                             original: result.result,
                             model_visible: FunctionToolOutput::from_text(
@@ -742,6 +744,30 @@ impl ToolRegistry {
                                 /*success*/ None,
                             ),
                         });
+                        if !is_code_mode_nested {
+                            let session_id = invocation.session.session_id().to_string();
+                            let tool_use_id = result
+                                .post_tool_use_payload
+                                .as_ref()
+                                .map_or(result.call_id.as_str(), |payload| {
+                                    payload.tool_use_id.as_str()
+                                });
+                            for response_id in replacement_response_ids {
+                                invocation
+                                    .session
+                                    .services
+                                    .code_mode_service
+                                    .accept_post_tool_use_replacement(
+                                        crate::tools::code_mode::PostToolUseAcceptanceContext {
+                                            response_id: &response_id,
+                                            session_id: &session_id,
+                                            turn_id: &invocation.turn.sub_id,
+                                            tool_use_id,
+                                        },
+                                    )
+                                    .await;
+                            }
+                        }
                     }
                 }
                 tool.on_tool_result_accepted(&invocation, result.result.as_ref());

@@ -229,6 +229,9 @@ pub(crate) struct PostToolUseHookSpecificOutputWire {
     pub hook_event_name: HookEventNameWire,
     #[serde(default)]
     pub additional_context: Option<String>,
+    /// Opaque identity for acknowledging a model-visible replacement.
+    #[serde(default, rename = "response_id")]
+    pub response_id: Option<String>,
     #[serde(default)]
     #[serde(rename = "updatedMCPToolOutput")]
     pub updated_mcp_tool_output: Option<Value>,
@@ -336,8 +339,9 @@ pub(crate) struct PostToolUseCommandInput {
     pub tool_response: Value,
     pub tool_use_id: String,
     /// Codex extension: true when Code Mode issued this nested tool call.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_code_mode_nested: Option<bool>,
+    pub is_code_mode_nested: bool,
+    /// PwrAgent fork contract: direct replacement selection acknowledgements are supported.
+    pub token_miser_acceptance_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

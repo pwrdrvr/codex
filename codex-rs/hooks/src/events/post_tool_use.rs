@@ -43,6 +43,8 @@ pub struct PostToolUseOutcome {
     pub should_block: bool,
     pub additional_contexts: Vec<String>,
     pub feedback_message: Option<String>,
+    /// Response identities whose hook feedback was selected as replacement text.
+    pub replacement_response_ids: Vec<String>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -50,6 +52,7 @@ struct PostToolUseHandlerData {
     should_block: bool,
     additional_contexts_for_model: Vec<AdditionalContext>,
     feedback_messages_for_model: Vec<String>,
+    replacement_response_ids: Vec<String>,
 }
 
 pub(crate) fn preview(
@@ -85,6 +88,7 @@ pub(crate) async fn run(
             should_block: false,
             additional_contexts: Vec::new(),
             feedback_message: None,
+            replacement_response_ids: Vec::new(),
         };
     }
 
@@ -128,6 +132,15 @@ pub(crate) async fn run(
             .flat_map(|result| result.data.feedback_messages_for_model.clone())
             .collect(),
     );
+    let replacement_response_ids = results
+        .iter()
+        .flat_map(|result| result.data.replacement_response_ids.iter().cloned())
+        .fold(Vec::new(), |mut response_ids, response_id| {
+            if !response_ids.contains(&response_id) {
+                response_ids.push(response_id);
+            }
+            response_ids
+        });
 
     PostToolUseOutcome {
         hook_events: results
@@ -139,6 +152,7 @@ pub(crate) async fn run(
         should_block,
         additional_contexts,
         feedback_message,
+        replacement_response_ids,
     }
 }
 
@@ -164,7 +178,8 @@ fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json
         tool_input: request.tool_input.clone(),
         tool_response: request.tool_response.clone(),
         tool_use_id: request.tool_use_id.clone(),
-        is_code_mode_nested: request.is_code_mode_nested.then_some(true),
+        is_code_mode_nested: request.is_code_mode_nested,
+        token_miser_acceptance_version: 2,
     })
 }
 
@@ -178,6 +193,7 @@ fn parse_completed(
     let mut should_block = false;
     let mut additional_contexts_for_model = Vec::new();
     let mut feedback_messages_for_model = Vec::new();
+    let mut replacement_response_ids = Vec::new();
 
     match run_result.error.as_deref() {
         Some(error) => {
@@ -193,6 +209,12 @@ fn parse_completed(
                 if trimmed_stdout.is_empty() {
                 } else if let Some(parsed) = output_parser::parse_post_tool_use(&run_result.stdout)
                 {
+                    let response_id = parsed
+                        .response_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|response_id| !response_id.is_empty())
+                        .map(str::to_string);
                     if let Some(system_message) = parsed.universal.system_message {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
@@ -226,6 +248,9 @@ fn parse_completed(
                                 .and_then(common::trimmed_non_empty)
                                 .unwrap_or(stop_text);
                             feedback_messages_for_model.push(model_feedback);
+                            if let Some(response_id) = response_id {
+                                replacement_response_ids.push(response_id);
+                            }
                         } else if let Some(invalid_reason) = parsed.invalid_reason {
                             status = HookRunStatus::Failed;
                             entries.push(HookOutputEntry {
@@ -303,6 +328,7 @@ fn parse_completed(
             should_block,
             additional_contexts_for_model,
             feedback_messages_for_model,
+            replacement_response_ids,
         },
         completion_order: 0,
     }
@@ -314,6 +340,7 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PostTo
         should_block: false,
         additional_contexts: Vec::new(),
         feedback_message: None,
+        replacement_response_ids: Vec::new(),
     }
 }
 
@@ -369,6 +396,7 @@ mod tests {
                 should_block: true,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: vec!["bash output looked sketchy".to_string()],
+                replacement_response_ids: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -397,6 +425,7 @@ mod tests {
                     limit: AdditionalContextLimit::from_config(Some(17)),
                 }],
                 feedback_messages_for_model: Vec::new(),
+                replacement_response_ids: Vec::new(),
             }
         );
         assert_eq!(
@@ -423,6 +452,7 @@ mod tests {
                 should_block: false,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: Vec::new(),
+                replacement_response_ids: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -464,6 +494,7 @@ mod tests {
                 should_block: true,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: vec!["post hook says pause".to_string()],
+                replacement_response_ids: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -475,7 +506,7 @@ mod tests {
             &handler(),
             run_result(
                 Some(0),
-                r#"{"continue":false,"stopReason":"halt after bash output","reason":"post-tool hook says stop"}"#,
+                r#"{"continue":false,"stopReason":"halt after bash output","reason":"post-tool hook says stop","hookSpecificOutput":{"hookEventName":"PostToolUse","response_id":"gate-direct-1"}}"#,
                 "",
             ),
             Some("turn-1".to_string()),
@@ -487,6 +518,7 @@ mod tests {
                 should_block: false,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: vec!["post-tool hook says stop".to_string()],
+                replacement_response_ids: vec!["gate-direct-1".to_string()],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
@@ -513,6 +545,7 @@ mod tests {
                 should_block: false,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: vec!["PostToolUse hook stopped execution".to_string()],
+                replacement_response_ids: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
@@ -539,6 +572,7 @@ mod tests {
                 should_block: false,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: Vec::new(),
+                replacement_response_ids: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
@@ -644,7 +678,8 @@ mod tests {
             &super::command_input_json(&direct).expect("serialize direct hook input"),
         )
         .expect("parse direct hook input");
-        assert_eq!(direct.get("is_code_mode_nested"), None);
+        assert_eq!(direct.get("is_code_mode_nested"), Some(&json!(false)));
+        assert_eq!(direct["token_miser_acceptance_version"], 2);
 
         let mut nested = request_for_tool_use("tool-2");
         nested.is_code_mode_nested = true;
@@ -653,5 +688,6 @@ mod tests {
         )
         .expect("parse nested hook input");
         assert_eq!(nested.get("is_code_mode_nested"), Some(&json!(true)));
+        assert_eq!(nested["token_miser_acceptance_version"], 2);
     }
 }

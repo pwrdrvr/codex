@@ -9,6 +9,7 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodeModeOutputReducerAcceptanceCapability;
 use codex_app_server_protocol::CodeModeOutputReducerCapability;
+use codex_app_server_protocol::DirectPostToolUseAcceptanceCapability;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
@@ -50,10 +51,19 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
                     "features.code_mode.max_output_tokens_ceiling".to_string(),
                 post_tool_use_nested_context_field: "is_code_mode_nested".to_string(),
                 supports_thread_resume_overrides: true,
+                dynamic_tools_resume_field: "dynamicTools".to_string(),
                 acceptance: CodeModeOutputReducerAcceptanceCapability {
                     descriptor_url_field: "acceptance_url".to_string(),
                     response_id_field: "response_id".to_string(),
                     callback_version: 2,
+                    direct_post_tool_use: DirectPostToolUseAcceptanceCapability {
+                        hook_response_id_field: "hookSpecificOutput.response_id".to_string(),
+                        hook_acceptance_version_field: "token_miser_acceptance_version".to_string(),
+                        hook_acceptance_version: 2,
+                        session_id_field: "session_id".to_string(),
+                        turn_id_field: "turn_id".to_string(),
+                        tool_use_id_field: "tool_use_id".to_string(),
+                    },
                 },
             },
         }

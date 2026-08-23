@@ -11,6 +11,9 @@
         "descriptorUrlField": {
           "type": "string"
         },
+        "directPostToolUse": {
+          "$ref": "#/definitions/DirectPostToolUseAcceptanceCapability"
+        },
         "responseIdField": {
           "type": "string"
         }
@@ -18,6 +21,7 @@
       "required": [
         "callbackVersion",
         "descriptorUrlField",
+        "directPostToolUse",
         "responseIdField"
       ],
       "type": "object"
@@ -28,6 +32,9 @@
           "$ref": "#/definitions/CodeModeOutputReducerAcceptanceCapability"
         },
         "configKey": {
+          "type": "string"
+        },
+        "dynamicToolsResumeField": {
           "type": "string"
         },
         "maxOutputTokensCeilingConfigKey": {
@@ -48,10 +55,44 @@
       "required": [
         "acceptance",
         "configKey",
+        "dynamicToolsResumeField",
         "maxOutputTokensCeilingConfigKey",
         "postToolUseNestedContextField",
         "protocolVersion",
         "supportsThreadResumeOverrides"
+      ],
+      "type": "object"
+    },
+    "DirectPostToolUseAcceptanceCapability": {
+      "properties": {
+        "hookAcceptanceVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "hookAcceptanceVersionField": {
+          "type": "string"
+        },
+        "hookResponseIdField": {
+          "type": "string"
+        },
+        "sessionIdField": {
+          "type": "string"
+        },
+        "toolUseIdField": {
+          "type": "string"
+        },
+        "turnIdField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookAcceptanceVersion",
+        "hookAcceptanceVersionField",
+        "hookResponseIdField",
+        "sessionIdField",
+        "toolUseIdField",
+        "turnIdField"
       ],
       "type": "object"
     }

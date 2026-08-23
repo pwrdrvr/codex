@@ -24,6 +24,7 @@ pub struct CodeModeOutputReducerCapability {
     pub max_output_tokens_ceiling_config_key: String,
     pub post_tool_use_nested_context_field: String,
     pub supports_thread_resume_overrides: bool,
+    pub dynamic_tools_resume_field: String,
     pub acceptance: CodeModeOutputReducerAcceptanceCapability,
 }
 
@@ -34,4 +35,17 @@ pub struct CodeModeOutputReducerAcceptanceCapability {
     pub descriptor_url_field: String,
     pub response_id_field: String,
     pub callback_version: u32,
+    pub direct_post_tool_use: DirectPostToolUseAcceptanceCapability,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DirectPostToolUseAcceptanceCapability {
+    pub hook_response_id_field: String,
+    pub hook_acceptance_version_field: String,
+    pub hook_acceptance_version: u32,
+    pub session_id_field: String,
+    pub turn_id_field: String,
+    pub tool_use_id_field: String,
 }

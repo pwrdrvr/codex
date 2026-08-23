@@ -43,6 +43,12 @@
     "session_id": {
       "type": "string"
     },
+    "token_miser_acceptance_version": {
+      "description": "PwrAgent fork contract: direct replacement selection acknowledgements are supported.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "tool_input": true,
     "tool_name": {
       "type": "string"
@@ -62,9 +68,11 @@
   "required": [
     "cwd",
     "hook_event_name",
+    "is_code_mode_nested",
     "model",
     "permission_mode",
     "session_id",
+    "token_miser_acceptance_version",
     "tool_input",
     "tool_name",
     "tool_response",
