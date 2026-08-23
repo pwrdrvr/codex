@@ -38,6 +38,8 @@ use crate::unified_exec::resolve_max_tokens;
 /// Wire version for both the descriptor file and the reduction request/response envelopes.
 const REDUCER_PROTOCOL_VERSION: u32 = 2;
 const LEGACY_REDUCER_PROTOCOL_VERSION: u32 = 1;
+const ACCEPTANCE_MAX_ATTEMPTS: u32 = 2;
+const ACCEPTANCE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Prepended to every replacement before it enters the parent model's context.
 ///
@@ -73,6 +75,14 @@ pub(super) struct ReductionContext {
     pub script_status: String,
 }
 
+/// Identity carried by a direct PostToolUse replacement acceptance callback.
+pub(crate) struct PostToolUseAcceptanceContext<'a> {
+    pub(crate) response_id: &'a str,
+    pub(crate) session_id: &'a str,
+    pub(crate) turn_id: &'a str,
+    pub(crate) tool_use_id: &'a str,
+}
+
 /// Replaces code-mode output on its way into model context.
 pub(super) trait CodeModeOutputReducer: Send + Sync {
     /// Returns a bounded replacement, or `None` to keep the original and truncate it.
@@ -85,6 +95,14 @@ pub(super) trait CodeModeOutputReducer: Send + Sync {
         items: &'a [FunctionCallOutputContentItem],
         max_output_tokens: usize,
     ) -> BoxFuture<'a, Option<Vec<FunctionCallOutputContentItem>>>;
+
+    /// Acknowledges a direct PostToolUse replacement after it is selected.
+    fn accept_post_tool_use<'a>(
+        &'a self,
+        _context: PostToolUseAcceptanceContext<'a>,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
 }
 
 /// Clamps the model-supplied output budget with the host-configured ceiling.
@@ -178,6 +196,15 @@ struct ReductionAcceptance<'a> {
     cell_id: &'a str,
 }
 
+#[derive(Debug, Serialize)]
+struct PostToolUseAcceptance<'a> {
+    version: u32,
+    response_id: &'a str,
+    session_id: &'a str,
+    turn_id: &'a str,
+    tool_use_id: &'a str,
+}
+
 /// Loopback HTTP reducer.
 ///
 /// This call originates in the Codex process, which is the *parent* of the `sandbox-exec` and
@@ -204,6 +231,60 @@ impl HttpCodeModeOutputReducer {
             })
             .ok()?;
         Some(Self { config, client })
+    }
+
+    async fn post_acceptance<T: Serialize + ?Sized>(
+        &self,
+        descriptor: &ReducerDescriptor,
+        acceptance_url: &str,
+        response_id: &str,
+        acceptance: &T,
+        deadline: tokio::time::Instant,
+    ) {
+        for attempt in 1..=ACCEPTANCE_MAX_ATTEMPTS {
+            let callback = self
+                .client
+                .post(acceptance_url)
+                .bearer_auth(&descriptor.token)
+                .json(acceptance)
+                .send();
+            match tokio::time::timeout_at(deadline, callback).await {
+                Ok(Ok(response)) if response.status().is_success() => return,
+                Ok(Ok(response)) => tracing::warn!(
+                    status = %response.status(),
+                    response_id,
+                    attempt,
+                    "output replacement acceptance callback returned an error status"
+                ),
+                Ok(Err(error)) => tracing::warn!(
+                    %error,
+                    response_id,
+                    attempt,
+                    "output replacement acceptance callback failed"
+                ),
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        timeout = ?self.config.timeout,
+                        response_id,
+                        attempt,
+                        "output replacement acceptance callback timed out"
+                    );
+                    return;
+                }
+            }
+            if attempt < ACCEPTANCE_MAX_ATTEMPTS {
+                let retry_at = tokio::time::Instant::now() + ACCEPTANCE_RETRY_DELAY;
+                if retry_at >= deadline {
+                    break;
+                }
+                tokio::time::sleep_until(retry_at).await;
+            }
+        }
+        tracing::warn!(
+            response_id,
+            attempts = ACCEPTANCE_MAX_ATTEMPTS,
+            "output replacement acceptance callback exhausted retries"
+        );
     }
 
     /// Returns `None` for every failure so the caller falls back to truncation.
@@ -322,39 +403,45 @@ impl HttpCodeModeOutputReducer {
                 cell_id: &context.cell_id,
             };
             // This is a one-way commit notification. Once the request is attempted, Codex must
-            // keep the replacement even if the response is lost: the host may already have
-            // received the callback and finalized its staged gate.
-            let callback_result = tokio::time::timeout_at(deadline, async {
-                let response = self.client
-                    .post(acceptance_url)
-                    .bearer_auth(&descriptor.token)
-                    .json(&acceptance)
-                    .send()
-                    .await
-                    .inspect_err(|error| {
-                        tracing::warn!(%error, "code-mode output reducer acceptance callback failed");
-                    })
-                    .ok()?;
-                Some(response.status())
-            })
+            // keep the replacement even if every bounded attempt is lost: the host may already
+            // have received one and finalized its staged gate.
+            self.post_acceptance(
+                &descriptor,
+                acceptance_url,
+                response_id,
+                &acceptance,
+                deadline,
+            )
             .await;
-            match callback_result {
-                Ok(Some(status)) if status.is_success() => {}
-                Ok(Some(status)) => tracing::warn!(
-                    %status,
-                    response_id,
-                    "code-mode output reducer acceptance callback returned an error status"
-                ),
-                Ok(None) => {}
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        timeout = ?self.config.timeout,
-                        "code-mode output reducer acceptance callback timed out"
-                    );
-                }
-            }
         }
         Some(replacement)
+    }
+
+    async fn try_accept_post_tool_use(&self, context: PostToolUseAcceptanceContext<'_>) {
+        let Some(descriptor) = read_descriptor(&self.config.descriptor_path).await else {
+            return;
+        };
+        if descriptor.version != REDUCER_PROTOCOL_VERSION {
+            return;
+        }
+        let Some(acceptance_url) = descriptor.acceptance_url.as_deref() else {
+            return;
+        };
+        let acceptance = PostToolUseAcceptance {
+            version: REDUCER_PROTOCOL_VERSION,
+            response_id: context.response_id,
+            session_id: context.session_id,
+            turn_id: context.turn_id,
+            tool_use_id: context.tool_use_id,
+        };
+        self.post_acceptance(
+            &descriptor,
+            acceptance_url,
+            context.response_id,
+            &acceptance,
+            tokio::time::Instant::now() + self.config.timeout,
+        )
+        .await;
     }
 }
 
@@ -366,6 +453,13 @@ impl CodeModeOutputReducer for HttpCodeModeOutputReducer {
         max_output_tokens: usize,
     ) -> BoxFuture<'a, Option<Vec<FunctionCallOutputContentItem>>> {
         Box::pin(self.try_reduce(context, items, max_output_tokens))
+    }
+
+    fn accept_post_tool_use<'a>(
+        &'a self,
+        context: PostToolUseAcceptanceContext<'a>,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(self.try_accept_post_tool_use(context))
     }
 }
 

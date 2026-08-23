@@ -54,6 +54,7 @@ use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
 use reducer::CodeModeOutputReducer;
 use reducer::HttpCodeModeOutputReducer;
+pub(crate) use reducer::PostToolUseAcceptanceContext;
 use reducer::ReductionContext;
 use reducer::apply_output_reduction;
 use response_adapter::into_function_call_output_content_items;
@@ -128,6 +129,16 @@ impl CodeModeService {
             cell_scripts: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             unavailable_warning_emitted: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) async fn accept_post_tool_use_replacement(
+        &self,
+        context: PostToolUseAcceptanceContext<'_>,
+    ) {
+        let reducer = self.reduction_config().output_reducer;
+        if let Some(reducer) = reducer {
+            reducer.accept_post_tool_use(context).await;
         }
     }
 

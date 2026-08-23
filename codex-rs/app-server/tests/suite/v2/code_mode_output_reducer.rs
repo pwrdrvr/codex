@@ -4,6 +4,8 @@ use std::time::Duration;
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use codex_app_server_protocol::DynamicToolFunctionSpec;
+use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -45,8 +47,7 @@ fn code_mode_override(value: Value) -> Option<HashMap<String, Value>> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn thread_start_and_loaded_resume_refresh_reducer_without_changing_code_mode_enablement()
--> Result<()> {
+async fn loaded_resume_before_first_turn_activates_reducer_and_dynamic_tools() -> Result<()> {
     let model_server = responses::start_mock_server().await;
     let responses_mock = responses::mount_sse_sequence(
         &model_server,
@@ -128,7 +129,6 @@ async fn thread_start_and_loaded_resume_refresh_reducer_without_changing_code_mo
     MockResponsesConfig::new(&model_server.uri())
         .with_model("test-gpt-5.1-codex")
         .enable_feature(Feature::CodeMode)
-        .enable_feature(Feature::CodeModeOnly)
         .write(codex_home.path())?;
 
     let mut app_server = TestAppServer::builder()
@@ -136,16 +136,35 @@ async fn thread_start_and_loaded_resume_refresh_reducer_without_changing_code_mo
         .build_initialized_with_timeout(READ_TIMEOUT)
         .await?;
     let started = app_server
-        .start_thread(ThreadStartParams {
+        .start_thread(ThreadStartParams::default())
+        .await?;
+    let resume_request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: started.thread.id.clone(),
             config: code_mode_override(json!({
                 "output_reducer": {
                     "descriptor_path": descriptor_path,
                     "min_trigger_bytes": 100,
                 }
             })),
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "token_miser_search".to_string(),
+                description: "Search preserved Token Miser output".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false,
+                }),
+                defer_loading: false,
+            })]),
             ..Default::default()
         })
         .await?;
+    let _: ThreadResumeResponse =
+        timeout(READ_TIMEOUT, app_server.read_response(resume_request_id)).await??;
     timeout(
         READ_TIMEOUT,
         app_server.start_turn_and_wait_for_completion(TurnStartParams {
@@ -207,6 +226,13 @@ async fn thread_start_and_loaded_resume_refresh_reducer_without_changing_code_mo
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 6);
+    assert!(
+        requests[0].body_json()["tools"]
+            .as_array()
+            .is_some_and(|tools| tools
+                .iter()
+                .any(|tool| { tool["name"].as_str() == Some("token_miser_search") }))
+    );
     let reduced = output_text(&requests[1].custom_tool_call_output("call-1")["output"]);
     let unreduced = output_text(&requests[3].custom_tool_call_output("call-2")["output"]);
     let ceiling_limited = output_text(&requests[5].custom_tool_call_output("call-3")["output"]);

@@ -103,6 +103,7 @@ export type { ContextCompactedNotification } from "./ContextCompactedNotificatio
 export type { CreditsSnapshot } from "./CreditsSnapshot";
 export type { DeprecationNoticeNotification } from "./DeprecationNoticeNotification";
 export type { DesktopOnboardingEntrypoint } from "./DesktopOnboardingEntrypoint";
+export type { DirectPostToolUseAcceptanceCapability } from "./DirectPostToolUseAcceptanceCapability";
 export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 export type { DynamicToolCallParams } from "./DynamicToolCallParams";
 export type { DynamicToolCallResponse } from "./DynamicToolCallResponse";

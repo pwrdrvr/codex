@@ -112,7 +112,9 @@ async fn run_turn_and_read_model_visible_output(
 
     test.submit_turn("summarize the output").await?;
 
-    Ok(model_visible_tool_output(&follow_up.single_request().body_json()))
+    Ok(model_visible_tool_output(
+        &follow_up.single_request().body_json(),
+    ))
 }
 
 /// Flattens a tool output, which is a bare string on the error path but an
@@ -141,15 +143,10 @@ fn model_visible_tool_output(body: &Value) -> String {
         .as_array()
         .expect("request should carry input items")
         .iter()
-        .filter(|item| {
-            item["type"] == "custom_tool_call_output" && item["call_id"] == "call-1"
-        })
+        .filter(|item| item["type"] == "custom_tool_call_output" && item["call_id"] == "call-1")
         .map(|item| output_text(&item["output"]))
         .collect();
-    assert!(
-        !outputs.is_empty(),
-        "no tool output for call-1 in: {body}"
-    );
+    assert!(!outputs.is_empty(), "no tool output for call-1 in: {body}");
     let joined = outputs.concat();
     assert!(
         !joined.is_empty(),
@@ -206,8 +203,8 @@ async fn a_configured_reducer_replaces_what_the_model_reads() -> Result<()> {
     let dir = TempDir::new()?;
     let descriptor_path = write_descriptor(&dir, &bridge);
 
-    let output = run_turn_and_read_model_visible_output(Some(reducer_config(descriptor_path)))
-        .await?;
+    let output =
+        run_turn_and_read_model_visible_output(Some(reducer_config(descriptor_path))).await?;
 
     assert!(
         output.contains("200 identical stack frames"),
@@ -268,8 +265,8 @@ async fn an_unreachable_reducer_leaves_the_turn_working() -> Result<()> {
         .to_string(),
     )?;
 
-    let output = run_turn_and_read_model_visible_output(Some(reducer_config(descriptor_path)))
-        .await?;
+    let output =
+        run_turn_and_read_model_visible_output(Some(reducer_config(descriptor_path))).await?;
 
     assert!(
         output.contains(NOISE_LINE),
