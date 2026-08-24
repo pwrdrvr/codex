@@ -54,6 +54,7 @@ export type { ChatgptAuthTokensRefreshResponse } from "./ChatgptAuthTokensRefres
 export type { CliAuthCredentialsStoreMode } from "./CliAuthCredentialsStoreMode";
 export type { CodeModeOutputReducerAcceptanceCapability } from "./CodeModeOutputReducerAcceptanceCapability";
 export type { CodeModeOutputReducerCapability } from "./CodeModeOutputReducerCapability";
+export type { CodeModePostToolUseGroupingCapability } from "./CodeModePostToolUseGroupingCapability";
 export type { CodexErrorInfo } from "./CodexErrorInfo";
 export type { CollabAgentState } from "./CollabAgentState";
 export type { CollabAgentStatus } from "./CollabAgentStatus";

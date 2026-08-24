@@ -25,6 +25,7 @@ use wiremock::matchers::path;
 
 use super::CodeModeOutputReducer;
 use super::HttpCodeModeOutputReducer;
+use super::OUTPUT_REDUCTION_CONTINUATION_GUIDANCE;
 use super::PostToolUseAcceptanceContext;
 use super::ReductionContext;
 use super::UNTRUSTED_REPLACEMENT_FOOTER;
@@ -208,6 +209,7 @@ async fn v2_acknowledges_the_accepted_replacement_with_stable_identity() {
             text(UNTRUSTED_REPLACEMENT_HEADER),
             text("accepted summary"),
             text(UNTRUSTED_REPLACEMENT_FOOTER),
+            text(OUTPUT_REDUCTION_CONTINUATION_GUIDANCE),
         ]
     );
     let requests = harness
@@ -273,6 +275,7 @@ async fn v2_acceptance_retries_once_after_a_transient_failure() {
             text(UNTRUSTED_REPLACEMENT_HEADER),
             text("retry summary"),
             text(UNTRUSTED_REPLACEMENT_FOOTER),
+            text(OUTPUT_REDUCTION_CONTINUATION_GUIDANCE),
         ]
     );
     let requests = harness
@@ -314,6 +317,7 @@ async fn v2_acceptance_response_cannot_revoke_the_committed_replacement() {
             text(UNTRUSTED_REPLACEMENT_HEADER),
             text("unconfirmed summary"),
             text(UNTRUSTED_REPLACEMENT_FOOTER),
+            text(OUTPUT_REDUCTION_CONTINUATION_GUIDANCE),
         ]
     );
 }
@@ -368,6 +372,7 @@ async fn healthy_reducer_replaces_output_and_fences_it() {
             text(UNTRUSTED_REPLACEMENT_HEADER),
             text("3 files listed; full output preserved as tm-42."),
             text(UNTRUSTED_REPLACEMENT_FOOTER),
+            text(OUTPUT_REDUCTION_CONTINUATION_GUIDANCE),
         ]
     );
 }

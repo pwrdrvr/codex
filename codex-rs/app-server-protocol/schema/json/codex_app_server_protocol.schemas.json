@@ -7690,11 +7690,19 @@
           "configKey": {
             "type": "string"
           },
+          "continuationGuidanceVersion": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
           "dynamicToolsResumeField": {
             "type": "string"
           },
           "maxOutputTokensCeilingConfigKey": {
             "type": "string"
+          },
+          "postToolUseGrouping": {
+            "$ref": "#/definitions/v2/CodeModePostToolUseGroupingCapability"
           },
           "postToolUseNestedContextField": {
             "type": "string"
@@ -7711,11 +7719,38 @@
         "required": [
           "acceptance",
           "configKey",
+          "continuationGuidanceVersion",
           "dynamicToolsResumeField",
           "maxOutputTokensCeilingConfigKey",
+          "postToolUseGrouping",
           "postToolUseNestedContextField",
           "protocolVersion",
           "supportsThreadResumeOverrides"
+        ],
+        "type": "object"
+      },
+      "CodeModePostToolUseGroupingCapability": {
+        "properties": {
+          "cellIdField": {
+            "type": "string"
+          },
+          "toolCallIdField": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "versionField": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cellIdField",
+          "toolCallIdField",
+          "version",
+          "versionField"
         ],
         "type": "object"
       },

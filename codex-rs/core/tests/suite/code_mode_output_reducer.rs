@@ -143,6 +143,41 @@ async fn run_script_and_read_model_visible_output(
     ))
 }
 
+async fn exec_description(reducer: Option<CodeModeOutputReducerConfig>) -> Result<String> {
+    let server = responses::start_mock_server().await;
+    let response = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            config.code_mode.output_reducer = reducer;
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("inspect the code mode contract").await?;
+
+    let body = response.single_request().body_json();
+    body["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                (tool["name"].as_str() == Some("exec"))
+                    .then(|| tool["description"].as_str())
+                    .flatten()
+            })
+        })
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("exec description should be present"))
+}
+
 /// Flattens a tool output, which is a bare string on the error path but an
 /// array of content items when code mode actually ran.
 fn output_text(output: &Value) -> String {
@@ -270,6 +305,28 @@ async fn a_configured_reducer_replaces_what_the_model_reads() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_configured_reducer_tells_the_model_to_preserve_parallel_batching() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let without_reducer = exec_description(None).await?;
+    assert!(!without_reducer.contains("merely to avoid output reduction"));
+
+    let descriptor_dir = TempDir::new()?;
+    let with_reducer = exec_description(Some(reducer_config(
+        descriptor_dir.path().join("bridge.json"),
+    )))
+    .await?;
+    assert!(with_reducer.contains(
+        "When several nested operations are independent, continue to run them concurrently with `Promise.all`."
+    ));
+    assert!(with_reducer.contains(
+        "Do not serialize independent operations or narrow them one at a time merely to avoid output reduction."
+    ));
+
+    Ok(())
+}
+
 /// Reducer selection happens after the code cell has finished. The same
 /// hand-written `Promise.all` cell must therefore dispatch nested operations
 /// concurrently with or without a reducer, and protocol v2 must acknowledge
@@ -340,6 +397,10 @@ async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_repl
     assert!(
         reduced.contains("untrusted_reduced_output"),
         "the selected replacement should retain Codex's untrusted-data fence: {reduced}"
+    );
+    assert!(
+        reduced.contains("Keep broad, independent Code Mode operations batched with `Promise.all`"),
+        "the selected replacement should remind the model to preserve batching: {reduced}"
     );
 
     let requests = bridge.received_requests().await.expect("recorded requests");

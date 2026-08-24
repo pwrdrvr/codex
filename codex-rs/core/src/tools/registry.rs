@@ -680,7 +680,7 @@ impl ToolRegistry {
                     &invocation.session,
                     &invocation.turn,
                     post_tool_use_payload,
-                    is_code_mode_nested,
+                    &invocation.source,
                 )
                 .await,
             )
