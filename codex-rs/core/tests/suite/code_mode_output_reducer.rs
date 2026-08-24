@@ -24,20 +24,39 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::time::Duration;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const REDUCE_PATH: &str = "/v1/reduce-code-mode-output";
+const ACCEPT_PATH: &str = "/v1/accept-code-mode-output";
 const BRIDGE_TOKEN: &str = "integration-test-token";
 /// Emitted by the script below; comfortably over the trigger threshold the test
 /// configures, and recognizable in the model-visible output.
 const NOISE_LINE: &str = "at codex::frame::deep::stack::trace::line";
+const PARALLEL_SCRIPT: &str = r#"// @exec: {"max_output_tokens": 2048}
+const args = {
+  barrier: {
+    id: "code-mode-reducer-parallel-tools",
+    participants: 2,
+    timeout_ms: 2_000,
+  },
+};
+
+const results = await Promise.all([
+  tools.test_sync_tool(args),
+  tools.test_sync_tool(args),
+]);
+
+text(JSON.stringify({ results, padding: "parallel-output-".repeat(300) }));
+"#;
 
 /// Writes the descriptor a host would write, pointing at `server`.
 fn write_descriptor(dir: &TempDir, server: &MockServer) -> std::path::PathBuf {
@@ -78,6 +97,13 @@ fn noisy_script() -> String {
 async fn run_turn_and_read_model_visible_output(
     reducer: Option<CodeModeOutputReducerConfig>,
 ) -> Result<String> {
+    run_script_and_read_model_visible_output(noisy_script(), reducer).await
+}
+
+async fn run_script_and_read_model_visible_output(
+    script: String,
+    reducer: Option<CodeModeOutputReducerConfig>,
+) -> Result<String> {
     let server = responses::start_mock_server().await;
     // Mirrors run_code_mode_turn_with_model_and_config in code_mode.rs. This
     // model's catalog entry already selects code mode; enabling the feature
@@ -96,7 +122,7 @@ async fn run_turn_and_read_model_visible_output(
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_custom_tool_call("call-1", "exec", &noisy_script()),
+            ev_custom_tool_call("call-1", "exec", &script),
             ev_completed("resp-1"),
         ]),
     )
@@ -241,6 +267,117 @@ async fn a_configured_reducer_replaces_what_the_model_reads() -> Result<()> {
         !body["cell_id"].as_str().unwrap_or_default().is_empty(),
         "the reducer needs a cell id to file the preserved output: {body}"
     );
+    Ok(())
+}
+
+/// Reducer selection happens after the code cell has finished. The same
+/// hand-written `Promise.all` cell must therefore dispatch nested operations
+/// concurrently with or without a reducer, and protocol v2 must acknowledge
+/// exactly the replacement Codex put into model context.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_replacement()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let unreduced =
+        run_script_and_read_model_visible_output(PARALLEL_SCRIPT.to_string(), None).await?;
+    assert!(
+        unreduced.contains(r#""results":["ok","ok"]"#),
+        "both barrier-backed nested calls should complete without a reducer: {unreduced}"
+    );
+    assert!(
+        !unreduced.contains("untrusted_reduced_output"),
+        "the reducer fence should be absent when reduction is disabled: {unreduced}"
+    );
+
+    let bridge = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .and(header(
+            "authorization",
+            format!("Bearer {BRIDGE_TOKEN}").as_str(),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "response_id": "parallel-gate-1",
+            "replacement": [{
+                "type": "input_text",
+                "text": "Both parallel nested operations completed successfully.",
+            }]
+        })))
+        .mount(&bridge)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .and(header(
+            "authorization",
+            format!("Bearer {BRIDGE_TOKEN}").as_str(),
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&bridge)
+        .await;
+    let descriptor_dir = TempDir::new()?;
+    let descriptor_path = descriptor_dir.path().join("bridge.json");
+    std::fs::write(
+        &descriptor_path,
+        serde_json::json!({
+            "version": 2,
+            "url": format!("{}{REDUCE_PATH}", bridge.uri()),
+            "acceptance_url": format!("{}{ACCEPT_PATH}", bridge.uri()),
+            "token": BRIDGE_TOKEN,
+        })
+        .to_string(),
+    )?;
+
+    let reduced = run_script_and_read_model_visible_output(
+        PARALLEL_SCRIPT.to_string(),
+        Some(reducer_config(descriptor_path)),
+    )
+    .await?;
+    assert!(
+        reduced.contains("Both parallel nested operations completed successfully."),
+        "the selected replacement should reach the model: {reduced}"
+    );
+    assert!(
+        reduced.contains("untrusted_reduced_output"),
+        "the selected replacement should retain Codex's untrusted-data fence: {reduced}"
+    );
+
+    let requests = bridge.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 2, "one reduction and one acceptance");
+    let reduction_request = requests
+        .iter()
+        .find(|request| request.url.path() == REDUCE_PATH)
+        .expect("reduction request");
+    let acceptance_request = requests
+        .iter()
+        .find(|request| request.url.path() == ACCEPT_PATH)
+        .expect("acceptance request");
+    let reduction: Value = serde_json::from_slice(&reduction_request.body)?;
+    let acceptance: Value = serde_json::from_slice(&acceptance_request.body)?;
+    assert_eq!(reduction["version"], serde_json::json!(2));
+    assert_eq!(
+        reduction["script"],
+        PARALLEL_SCRIPT
+            .strip_prefix("// @exec: {\"max_output_tokens\": 2048}\n")
+            .expect("parallel script should start with its exec pragma")
+    );
+    assert_eq!(reduction["max_output_tokens"], serde_json::json!(2_048));
+    assert!(
+        output_text(&reduction["content_items"]).contains(r#""results":["ok","ok"]"#),
+        "the reducer should receive output proving both barrier-backed calls completed: {reduction}"
+    );
+    assert_eq!(
+        acceptance,
+        serde_json::json!({
+            "version": 2,
+            "response_id": "parallel-gate-1",
+            "thread_id": reduction["thread_id"],
+            "turn_id": reduction["turn_id"],
+            "call_id": reduction["call_id"],
+            "cell_id": reduction["cell_id"],
+        })
+    );
+
     Ok(())
 }
 
