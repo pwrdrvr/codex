@@ -5,6 +5,15 @@ use codex_tools::FreeformToolFormat;
 use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
+const OUTPUT_REDUCTION_GUIDANCE: &str = r#"Output reduction is applied only after a cell finishes. Nested tool return values remain complete inside the JavaScript cell.
+When several nested operations are independent, continue to run them concurrently with `Promise.all`. Inspect or transform their results inside JavaScript and emit one compact combined result. Do not serialize independent operations or narrow them one at a time merely to avoid output reduction."#;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OutputReductionGuidance {
+    Omit,
+    Include,
+}
+
 pub(crate) fn create_code_mode_tool(
     enabled_tools: &[CodeModeToolDefinition],
     deferred_tools: &[CodeModeToolDefinition],
@@ -12,6 +21,7 @@ pub(crate) fn create_code_mode_tool(
     default_exec_yield_time_ms: u64,
     code_mode_only: bool,
     image_detail_visibility: ImageDetailVisibility,
+    output_reduction_guidance: OutputReductionGuidance,
 ) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source
@@ -23,16 +33,22 @@ NEWLINE: /\r?\n/
 SOURCE: /[\s\S]+/
 "#;
 
+    let mut description = codex_code_mode::build_exec_tool_description(
+        enabled_tools,
+        deferred_tools,
+        namespace_descriptions,
+        default_exec_yield_time_ms,
+        code_mode_only,
+        image_detail_visibility,
+    );
+    if output_reduction_guidance == OutputReductionGuidance::Include {
+        description.push_str("\n\n");
+        description.push_str(OUTPUT_REDUCTION_GUIDANCE);
+    }
+
     ToolSpec::Freeform(FreeformTool {
         name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
-        description: codex_code_mode::build_exec_tool_description(
-            enabled_tools,
-            deferred_tools,
-            namespace_descriptions,
-            default_exec_yield_time_ms,
-            code_mode_only,
-            image_detail_visibility,
-        ),
+        description,
         defer_loading: None,
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
@@ -67,6 +83,7 @@ mod tests {
                 codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
                 /*code_mode_only*/ true,
                 ImageDetailVisibility::Visible,
+                OutputReductionGuidance::Omit,
             ),
             ToolSpec::Freeform(FreeformTool {
                 name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),

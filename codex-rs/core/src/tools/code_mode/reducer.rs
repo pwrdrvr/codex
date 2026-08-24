@@ -59,6 +59,19 @@ pub(super) const UNTRUSTED_REPLACEMENT_HEADER: &str = concat!(
 /// Closes the fence opened by [`UNTRUSTED_REPLACEMENT_HEADER`].
 pub(super) const UNTRUSTED_REPLACEMENT_FOOTER: &str = "</untrusted_reduced_output>";
 
+/// Trusted continuation guidance appended after a selected replacement.
+///
+/// Keeping this outside the untrusted-data fence makes the reduction semantics actionable at the
+/// decision point where the parent model chooses its next cell. The guidance is Codex-owned and
+/// bounded independently of the host replacement budget, like the script-status header.
+pub(super) const OUTPUT_REDUCTION_CONTINUATION_GUIDANCE: &str = concat!(
+    "Codex guidance: output reduction occurs only after the cell completes and does not change ",
+    "nested tool results inside JavaScript. Keep broad, independent Code Mode operations batched ",
+    "with `Promise.all`, inspect or transform their results in the cell, and emit one compact ",
+    "combined result. Use reduced summaries to triage; retrieve only the selected results that ",
+    "need deeper inspection, preferably together in a later batch."
+);
+
 /// Contextual identifiers a reducer needs to file and later serve the preserved output.
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ReductionContext {
@@ -139,7 +152,12 @@ pub(super) async fn apply_output_reduction(
         return super::truncate_code_mode_result(items, max_output_tokens);
     };
     // Truncate the replacement under the same policy: the budget is the host's, not the reducer's.
-    super::truncate_code_mode_result(fence_replacement(replacement), max_output_tokens)
+    let mut reduced =
+        super::truncate_code_mode_result(fence_replacement(replacement), max_output_tokens);
+    reduced.push(FunctionCallOutputContentItem::InputText {
+        text: OUTPUT_REDUCTION_CONTINUATION_GUIDANCE.to_string(),
+    });
+    reduced
 }
 
 /// Wraps a replacement so the parent model reads it as data rather than as instructions.

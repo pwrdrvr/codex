@@ -9,6 +9,7 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodeModeOutputReducerAcceptanceCapability;
 use codex_app_server_protocol::CodeModeOutputReducerCapability;
+use codex_app_server_protocol::CodeModePostToolUseGroupingCapability;
 use codex_app_server_protocol::DirectPostToolUseAcceptanceCapability;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -46,10 +47,17 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
         ServerCapabilitiesReadResponse {
             code_mode_output_reducer: CodeModeOutputReducerCapability {
                 protocol_version: 2,
+                continuation_guidance_version: 1,
                 config_key: "features.code_mode.output_reducer".to_string(),
                 max_output_tokens_ceiling_config_key:
                     "features.code_mode.max_output_tokens_ceiling".to_string(),
                 post_tool_use_nested_context_field: "is_code_mode_nested".to_string(),
+                post_tool_use_grouping: CodeModePostToolUseGroupingCapability {
+                    version_field: "token_miser_grouping_version".to_string(),
+                    version: 1,
+                    cell_id_field: "code_mode_cell_id".to_string(),
+                    tool_call_id_field: "code_mode_tool_call_id".to_string(),
+                },
                 supports_thread_resume_overrides: true,
                 dynamic_tools_resume_field: "dynamicTools".to_string(),
                 acceptance: CodeModeOutputReducerAcceptanceCapability {

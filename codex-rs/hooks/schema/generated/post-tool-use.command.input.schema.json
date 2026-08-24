@@ -16,6 +16,14 @@
     "agent_type": {
       "type": "string"
     },
+    "code_mode_cell_id": {
+      "description": "PwrAgent fork contract: stable cell/group key for nested Code Mode tool calls.",
+      "type": "string"
+    },
+    "code_mode_tool_call_id": {
+      "description": "PwrAgent fork contract: runtime-local member key within `code_mode_cell_id`.",
+      "type": "string"
+    },
     "cwd": {
       "type": "string"
     },
@@ -49,6 +57,12 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "token_miser_grouping_version": {
+      "description": "PwrAgent fork contract: nested PostToolUse grouping fields are supported.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "tool_input": true,
     "tool_name": {
       "type": "string"
@@ -73,6 +87,7 @@
     "permission_mode",
     "session_id",
     "token_miser_acceptance_version",
+    "token_miser_grouping_version",
     "tool_input",
     "tool_name",
     "tool_response",

@@ -49,6 +49,7 @@ use crate::event_mapping::parse_turn_item;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::context::ToolCallSource;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -270,8 +271,15 @@ pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     payload: PostToolUsePayload,
-    is_code_mode_nested: bool,
+    source: &ToolCallSource,
 ) -> PostToolUseOutcome {
+    let (code_mode_cell_id, code_mode_tool_call_id) = match source {
+        ToolCallSource::CodeMode {
+            cell_id,
+            runtime_tool_call_id,
+        } => (Some(cell_id.clone()), Some(runtime_tool_call_id.clone())),
+        ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => (None, None),
+    };
     let matcher_aliases = payload.tool_name.matcher_aliases().to_vec();
     let request = PostToolUseRequest {
         session_id: sess.session_id().into(),
@@ -287,7 +295,9 @@ pub(crate) async fn run_post_tool_use_hooks(
         tool_use_id: payload.tool_use_id,
         tool_input: payload.tool_input,
         tool_response: payload.tool_response,
-        is_code_mode_nested,
+        is_code_mode_nested: code_mode_cell_id.is_some(),
+        code_mode_cell_id,
+        code_mode_tool_call_id,
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_post_tool_use(&request);

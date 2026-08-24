@@ -4070,6 +4070,17 @@ try {{
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
     assert_eq!(hook_inputs[0]["is_code_mode_nested"], true);
     assert_eq!(hook_inputs[0]["token_miser_acceptance_version"], 2);
+    assert_eq!(hook_inputs[0]["token_miser_grouping_version"], 1);
+    assert!(
+        hook_inputs[0]["code_mode_cell_id"]
+            .as_str()
+            .is_some_and(|cell_id| !cell_id.is_empty())
+    );
+    assert!(
+        hook_inputs[0]["code_mode_tool_call_id"]
+            .as_str()
+            .is_some_and(|tool_call_id| !tool_call_id.is_empty())
+    );
     assert_eq!(
         hook_inputs[0]["tool_response"],
         Value::String("original-post-tool-result".to_string())
@@ -4910,6 +4921,9 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
     assert_eq!(hook_inputs[0]["is_code_mode_nested"], false);
     assert_eq!(hook_inputs[0]["token_miser_acceptance_version"], 2);
+    assert_eq!(hook_inputs[0]["token_miser_grouping_version"], 1);
+    assert_eq!(hook_inputs[0].get("code_mode_cell_id"), None);
+    assert_eq!(hook_inputs[0].get("code_mode_tool_call_id"), None);
     assert_eq!(
         hook_inputs[0]["tool_response"],
         Value::String("post-tool-output".to_string())
