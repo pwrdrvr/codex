@@ -34,6 +34,7 @@ pub struct PostToolUseRequest {
     pub tool_use_id: String,
     pub tool_input: Value,
     pub tool_response: Value,
+    pub exact_tool_response: Option<Value>,
     pub is_code_mode_nested: bool,
     pub code_mode_cell_id: Option<String>,
     pub code_mode_tool_call_id: Option<String>,
@@ -180,6 +181,8 @@ fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json
         tool_name: request.tool_name.clone(),
         tool_input: request.tool_input.clone(),
         tool_response: request.tool_response.clone(),
+        token_miser_exact_tool_response_version: request.exact_tool_response.as_ref().map(|_| 1),
+        token_miser_exact_tool_response: request.exact_tool_response.clone(),
         tool_use_id: request.tool_use_id.clone(),
         is_code_mode_nested: request.is_code_mode_nested,
         code_mode_cell_id: request.code_mode_cell_id.clone(),
@@ -279,6 +282,9 @@ fn parse_completed(
                                     text: reason.clone(),
                                 });
                                 feedback_messages_for_model.push(reason);
+                                if let Some(response_id) = response_id {
+                                    replacement_response_ids.push(response_id);
+                                }
                             }
                         }
                     }
@@ -391,7 +397,7 @@ mod tests {
             &handler(),
             run_result(
                 Some(0),
-                r#"{"decision":"block","reason":"bash output looked sketchy"}"#,
+                r#"{"decision":"block","reason":"bash output looked sketchy","hookSpecificOutput":{"hookEventName":"PostToolUse","response_id":"block-gate-1"}}"#,
                 "",
             ),
             Some("turn-1".to_string()),
@@ -403,7 +409,7 @@ mod tests {
                 should_block: true,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: vec!["bash output looked sketchy".to_string()],
-                replacement_response_ids: Vec::new(),
+                replacement_response_ids: vec!["block-gate-1".to_string()],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -674,6 +680,7 @@ mod tests {
             tool_use_id: tool_use_id.to_string(),
             tool_input: json!({ "command": "echo hello" }),
             tool_response: json!({"ok": true}),
+            exact_tool_response: None,
             is_code_mode_nested: false,
             code_mode_cell_id: None,
             code_mode_tool_call_id: None,

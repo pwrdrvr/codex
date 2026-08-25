@@ -29,6 +29,7 @@ pub struct CodeModeOutputReducerCapability {
     pub max_output_tokens_ceiling_config_key: String,
     pub post_tool_use_nested_context_field: String,
     pub post_tool_use_grouping: CodeModePostToolUseGroupingCapability,
+    pub post_tool_use_exact_output: CodeModePostToolUseExactOutputCapability,
     pub supports_thread_resume_overrides: bool,
     pub dynamic_tools_resume_field: String,
     pub acceptance: CodeModeOutputReducerAcceptanceCapability,
@@ -52,6 +53,15 @@ pub struct CodeModePostToolUseGroupingCapability {
     pub version: u32,
     pub cell_id_field: String,
     pub tool_call_id_field: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodeModePostToolUseExactOutputCapability {
+    pub version: u32,
+    pub version_field: String,
+    pub response_field: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

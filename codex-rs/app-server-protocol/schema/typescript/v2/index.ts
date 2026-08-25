@@ -55,6 +55,7 @@ export type { CliAuthCredentialsStoreMode } from "./CliAuthCredentialsStoreMode"
 export type { CodeModeActionableStateCapability } from "./CodeModeActionableStateCapability";
 export type { CodeModeOutputReducerAcceptanceCapability } from "./CodeModeOutputReducerAcceptanceCapability";
 export type { CodeModeOutputReducerCapability } from "./CodeModeOutputReducerCapability";
+export type { CodeModePostToolUseExactOutputCapability } from "./CodeModePostToolUseExactOutputCapability";
 export type { CodeModePostToolUseGroupingCapability } from "./CodeModePostToolUseGroupingCapability";
 export type { CodexErrorInfo } from "./CodexErrorInfo";
 export type { CollabAgentState } from "./CollabAgentState";

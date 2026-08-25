@@ -7734,6 +7734,9 @@
           "maxOutputTokensCeilingConfigKey": {
             "type": "string"
           },
+          "postToolUseExactOutput": {
+            "$ref": "#/definitions/v2/CodeModePostToolUseExactOutputCapability"
+          },
           "postToolUseField": {
             "type": "string"
           },
@@ -7763,12 +7766,34 @@
           "dynamicToolsResumeField",
           "intentContextVersion",
           "maxOutputTokensCeilingConfigKey",
+          "postToolUseExactOutput",
           "postToolUseField",
           "postToolUseGrouping",
           "postToolUseNestedContextField",
           "protocolVersion",
           "reducerRequestField",
           "supportsThreadResumeOverrides"
+        ],
+        "type": "object"
+      },
+      "CodeModePostToolUseExactOutputCapability": {
+        "properties": {
+          "responseField": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "versionField": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "responseField",
+          "version",
+          "versionField"
         ],
         "type": "object"
       },

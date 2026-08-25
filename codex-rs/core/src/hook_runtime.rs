@@ -40,6 +40,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
+use codex_utils_output_truncation::formatted_truncate_text;
 use serde_json::Value;
 use tracing::instrument;
 
@@ -282,6 +283,19 @@ pub(crate) async fn run_post_tool_use_hooks(
         ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => (None, None),
     };
     let matcher_aliases = payload.tool_name.matcher_aliases().to_vec();
+    let exact_tool_response = turn_context
+        .config
+        .code_mode
+        .output_reducer
+        .is_some()
+        .then(|| payload.tool_response.clone());
+    let tool_response = match payload.tool_response {
+        Value::String(response) => Value::String(formatted_truncate_text(
+            &response,
+            turn_context.model_info.truncation_policy.into(),
+        )),
+        response => response,
+    };
     let request = PostToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -295,7 +309,8 @@ pub(crate) async fn run_post_tool_use_hooks(
         matcher_aliases,
         tool_use_id: payload.tool_use_id,
         tool_input: payload.tool_input,
-        tool_response: payload.tool_response,
+        tool_response,
+        exact_tool_response,
         is_code_mode_nested: code_mode_cell_id.is_some(),
         code_mode_cell_id,
         code_mode_tool_call_id,

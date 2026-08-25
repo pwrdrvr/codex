@@ -22,6 +22,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -771,6 +772,15 @@ elif mode == "decision_block":
     print(json.dumps({{
         "decision": "block",
         "reason": reason
+    }}))
+elif mode == "decision_block_with_response_id":
+    print(json.dumps({{
+        "decision": "block",
+        "reason": reason,
+        "hookSpecificOutput": {{
+            "hookEventName": "PostToolUse",
+            "response_id": "direct-gate-1"
+        }}
     }}))
 elif mode == "continue_false":
     print(json.dumps({{
@@ -4968,6 +4978,11 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     assert_eq!(hook_input["token_miser_acceptance_version"], 1);
     assert_eq!(hook_input["token_miser_grouping_version"], 1);
     assert_eq!(hook_input["parent_intent"], parent_intent);
+    assert_eq!(
+        hook_input.get("token_miser_exact_tool_response_version"),
+        None
+    );
+    assert_eq!(hook_input.get("token_miser_exact_tool_response"), None);
     assert!(!hook_input.to_string().contains(hidden_reasoning));
     assert_eq!(hook_input.get("code_mode_cell_id"), None);
     assert_eq!(hook_input.get("code_mode_tool_call_id"), None);
@@ -4993,6 +5008,83 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_tool_use_exposes_full_exact_response_only_with_output_reducer() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-exact-response";
+    let exact_output = format!("START-{}-END", "x".repeat(/*n*/ 4_096));
+    let command = "python3 -c \"import sys; sys.stdout.write('START-' + 'x' * 4096 + '-END')\"";
+    let args = serde_json::json!({ "command": command });
+    let _responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "exact post hook output observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let descriptor_dir = TempDir::new()?;
+    let descriptor_path = descriptor_dir.path().join("reducer.json");
+    fs::write(
+        &descriptor_path,
+        serde_json::json!({
+            "version": 1,
+            "url": "http://127.0.0.1:9/reduce",
+            "acceptance_url": "http://127.0.0.1:9/accept",
+            "token": "exact-output-token",
+        })
+        .to_string(),
+    )?;
+    let descriptor_path_for_config = descriptor_path.clone();
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.truncation_policy = TruncationPolicyConfig::bytes(/*limit*/ 256);
+        })
+        .with_pre_build_hook(|home| {
+            write_post_tool_use_hook(home, Some("^Bash$"), "context", "exact output observed")
+                .expect("write exact output post tool use hook fixture");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.code_mode.output_reducer = Some(CodeModeOutputReducerConfig {
+                descriptor_path: descriptor_path_for_config,
+                min_trigger_bytes: 1,
+                max_request_bytes: 1024 * 1024,
+                max_response_bytes: 64 * 1024,
+                timeout: Duration::from_secs(5),
+                connect_timeout: Duration::from_secs(2),
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the command with exact post hook output")
+        .await?;
+
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    let hook_input = &hook_inputs[0];
+    let tool_response = hook_input["tool_response"]
+        .as_str()
+        .expect("legacy tool_response should remain a string");
+    assert_ne!(tool_response, exact_output);
+    assert!(tool_response.contains("chars truncated"));
+    assert_eq!(hook_input["token_miser_exact_tool_response_version"], 1);
+    assert_eq!(hook_input["token_miser_exact_tool_response"], exact_output);
 
     Ok(())
 }
@@ -5169,7 +5261,7 @@ async fn post_tool_use_selected_replacement_is_acknowledged_with_direct_identity
             write_post_tool_use_hook(
                 home,
                 Some("^Bash$"),
-                "continue_false_with_response_id",
+                "decision_block_with_response_id",
                 "selected replacement",
             )
             .expect("write post tool use hook");

@@ -733,23 +733,18 @@ impl ToolRegistry {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
                 if let Some(outcome) = post_tool_use_outcome {
-                    if outcome.should_block {
-                        let message = outcome.feedback_message.unwrap_or_else(|| {
-                            "PostToolUse hook blocked the tool result".to_string()
-                        });
-                        let err = FunctionCallError::RespondToModel(message);
-                        dispatch_trace.record_failed(&err);
-                        return Err(err);
-                    }
+                    let should_block = outcome.should_block;
                     if let Some(feedback_message) = outcome.feedback_message {
                         let replacement_response_ids = outcome.replacement_response_ids;
-                        result.result = Box::new(PostToolUseFeedbackOutput {
-                            original: result.result,
-                            model_visible: FunctionToolOutput::from_text(
-                                feedback_message,
-                                /*success*/ None,
-                            ),
-                        });
+                        if !should_block {
+                            result.result = Box::new(PostToolUseFeedbackOutput {
+                                original: result.result,
+                                model_visible: FunctionToolOutput::from_text(
+                                    feedback_message.clone(),
+                                    /*success*/ None,
+                                ),
+                            });
+                        }
                         if !is_code_mode_nested {
                             let session_id = invocation.session.session_id().to_string();
                             let tool_use_id = result
@@ -774,6 +769,17 @@ impl ToolRegistry {
                                     .await;
                             }
                         }
+                        if should_block {
+                            let err = FunctionCallError::RespondToModel(feedback_message);
+                            dispatch_trace.record_failed(&err);
+                            return Err(err);
+                        }
+                    } else if should_block {
+                        let err = FunctionCallError::RespondToModel(
+                            "PostToolUse hook blocked the tool result".to_string(),
+                        );
+                        dispatch_trace.record_failed(&err);
+                        return Err(err);
                     }
                 }
                 tool.on_tool_result_accepted(&invocation, result.result.as_ref());

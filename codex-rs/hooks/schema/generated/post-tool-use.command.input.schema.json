@@ -61,6 +61,15 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "token_miser_exact_tool_response": {
+      "description": "PwrAgent fork contract: full stable hook response before model-budget truncation."
+    },
+    "token_miser_exact_tool_response_version": {
+      "description": "PwrAgent fork contract: version of the optional full stable hook response.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "token_miser_grouping_version": {
       "description": "PwrAgent fork contract: nested PostToolUse grouping fields are supported.",
       "format": "uint32",

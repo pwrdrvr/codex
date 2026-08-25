@@ -337,6 +337,12 @@ pub(crate) struct PostToolUseCommandInput {
     pub tool_name: String,
     pub tool_input: Value,
     pub tool_response: Value,
+    /// PwrAgent fork contract: version of the optional full stable hook response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_miser_exact_tool_response_version: Option<u32>,
+    /// PwrAgent fork contract: full stable hook response before model-budget truncation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_miser_exact_tool_response: Option<Value>,
     pub tool_use_id: String,
     /// Codex extension: true when Code Mode issued this nested tool call.
     pub is_code_mode_nested: bool,

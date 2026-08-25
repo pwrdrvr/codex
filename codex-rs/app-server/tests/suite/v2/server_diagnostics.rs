@@ -10,6 +10,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodeModeActionableStateCapability;
 use codex_app_server_protocol::CodeModeOutputReducerAcceptanceCapability;
 use codex_app_server_protocol::CodeModeOutputReducerCapability;
+use codex_app_server_protocol::CodeModePostToolUseExactOutputCapability;
 use codex_app_server_protocol::CodeModePostToolUseGroupingCapability;
 use codex_app_server_protocol::DirectPostToolUseAcceptanceCapability;
 use codex_app_server_protocol::InitializeCapabilities;
@@ -67,6 +68,11 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
                     version: 1,
                     cell_id_field: "code_mode_cell_id".to_string(),
                     tool_call_id_field: "code_mode_tool_call_id".to_string(),
+                },
+                post_tool_use_exact_output: CodeModePostToolUseExactOutputCapability {
+                    version: 1,
+                    version_field: "token_miser_exact_tool_response_version".to_string(),
+                    response_field: "token_miser_exact_tool_response".to_string(),
                 },
                 supports_thread_resume_overrides: true,
                 dynamic_tools_resume_field: "dynamicTools".to_string(),
