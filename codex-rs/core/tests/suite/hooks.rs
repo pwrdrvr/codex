@@ -5126,12 +5126,12 @@ async fn post_tool_use_selected_replacement_is_acknowledged_with_direct_identity
     let acceptance_server = MockServer::start().await;
     let descriptor_dir = TempDir::new()?;
     let descriptor_path = descriptor_dir.path().join("reducer.json");
-    let acceptance_path = "/v2/accept";
+    let acceptance_path = "/v1/accept";
     let token = "direct-hook-token";
     fs::write(
         &descriptor_path,
         serde_json::json!({
-            "version": 2,
+            "version": 1,
             "url": format!("{}/unused-reduce", acceptance_server.uri()),
             "acceptance_url": format!("{}{acceptance_path}", acceptance_server.uri()),
             "token": token,
@@ -5202,7 +5202,7 @@ async fn post_tool_use_selected_replacement_is_acknowledged_with_direct_identity
     assert_eq!(
         callbacks[0].body_json::<Value>()?,
         serde_json::json!({
-            "version": 2,
+            "version": 1,
             "response_id": "direct-gate-1",
             "session_id": hook_inputs[0]["session_id"],
             "turn_id": hook_inputs[0]["turn_id"],
@@ -5224,9 +5224,9 @@ async fn post_tool_use_unselected_response_id_keeps_original_without_acceptance(
     fs::write(
         &descriptor_path,
         serde_json::json!({
-            "version": 2,
+            "version": 1,
             "url": format!("{}/unused-reduce", acceptance_server.uri()),
-            "acceptance_url": format!("{}/v2/accept", acceptance_server.uri()),
+            "acceptance_url": format!("{}/v1/accept", acceptance_server.uri()),
             "token": "direct-hook-token",
         })
         .to_string(),

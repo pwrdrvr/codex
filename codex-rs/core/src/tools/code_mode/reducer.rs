@@ -458,9 +458,7 @@ impl HttpCodeModeOutputReducer {
             .as_deref()
             .and_then(|response_id| (!response_id.trim().is_empty()).then_some(response_id))
             .or_else(|| {
-                tracing::warn!(
-                    "code-mode output reducer response omitted a non-empty response_id"
-                );
+                tracing::warn!("code-mode output reducer response omitted a non-empty response_id");
                 None
             })?;
         let acceptance = ReductionAcceptance {
