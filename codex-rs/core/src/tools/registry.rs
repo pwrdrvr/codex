@@ -16,6 +16,7 @@ use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -663,6 +664,12 @@ impl ToolRegistry {
             Ok((_, success)) => *success,
             Err(_) => false,
         };
+        let is_code_mode_nested = matches!(invocation.source, ToolCallSource::CodeMode { .. });
+        let parent_intent = invocation
+            .session
+            .services
+            .code_mode_service
+            .take_parent_intent(&invocation.call_id, &invocation.source);
         emit_metric_for_tool_read(&invocation, success);
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
@@ -677,11 +684,9 @@ impl ToolRegistry {
                 run_post_tool_use_hooks(
                     &invocation.session,
                     &invocation.turn,
-                    post_tool_use_payload.tool_use_id,
-                    post_tool_use_payload.tool_name.name().to_string(),
-                    post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
-                    post_tool_use_payload.tool_input,
-                    post_tool_use_payload.tool_response,
+                    post_tool_use_payload,
+                    &invocation.source,
+                    parent_intent,
                 )
                 .await,
             )
@@ -737,6 +742,7 @@ impl ToolRegistry {
                         return Err(err);
                     }
                     if let Some(feedback_message) = outcome.feedback_message {
+                        let replacement_response_ids = outcome.replacement_response_ids;
                         result.result = Box::new(PostToolUseFeedbackOutput {
                             original: result.result,
                             model_visible: FunctionToolOutput::from_text(
@@ -744,6 +750,30 @@ impl ToolRegistry {
                                 /*success*/ None,
                             ),
                         });
+                        if !is_code_mode_nested {
+                            let session_id = invocation.session.session_id().to_string();
+                            let tool_use_id = result
+                                .post_tool_use_payload
+                                .as_ref()
+                                .map_or(result.call_id.as_str(), |payload| {
+                                    payload.tool_use_id.as_str()
+                                });
+                            for response_id in replacement_response_ids {
+                                invocation
+                                    .session
+                                    .services
+                                    .code_mode_service
+                                    .accept_post_tool_use_replacement(
+                                        crate::tools::code_mode::PostToolUseAcceptanceContext {
+                                            response_id: &response_id,
+                                            session_id: &session_id,
+                                            turn_id: &invocation.turn.sub_id,
+                                            tool_use_id,
+                                        },
+                                    )
+                                    .await;
+                            }
+                        }
                     }
                 }
                 tool.on_tool_result_accepted(&invocation, result.result.as_ref());

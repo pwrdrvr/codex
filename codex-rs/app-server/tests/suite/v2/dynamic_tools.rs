@@ -21,6 +21,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -169,6 +171,164 @@ async fn thread_start_normalizes_legacy_dynamic_tools_into_model_request() -> Re
             }],
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn loaded_thread_resume_adds_dynamic_tools_before_first_turn() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response(
+        "First turn done",
+    )?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let started = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(started)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(response)?;
+
+    let dynamic_tool = token_miser_tool("token_miser_search");
+    let resumed = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            dynamic_tools: Some(vec![dynamic_tool]),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resumed)),
+    )
+    .await??;
+    let _: ThreadResumeResponse = to_response(response)?;
+
+    start_turn_and_wait(&mut mcp, &thread.id, "first turn after late opt-in").await?;
+
+    let bodies = responses_bodies(&server).await?;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(
+        find_tool(&bodies[0], "token_miser_search"),
+        Some(&json!({
+            "type": "function",
+            "name": "token_miser_search",
+            "description": "Search preserved Token Miser output",
+            "strict": false,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"],
+                "additionalProperties": false,
+            },
+        }))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn loaded_thread_resume_dynamic_tools_omit_preserves_empty_clears_and_nonempty_replaces()
+-> Result<()> {
+    let responses = (0..4)
+        .map(|index| create_final_assistant_message_sse_response(&format!("turn {index}")))
+        .collect::<Result<Vec<_>>>()?;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    let started = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            dynamic_tools: Some(vec![token_miser_tool("catalog_a")]),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(started)).await??;
+
+    start_turn_and_wait(&mut mcp, &thread.id, "initial catalog").await?;
+    resume_with_dynamic_tools(&mut mcp, &thread.id, None).await?;
+    start_turn_and_wait(&mut mcp, &thread.id, "omitted preserves").await?;
+    resume_with_dynamic_tools(
+        &mut mcp,
+        &thread.id,
+        Some(vec![token_miser_tool("catalog_b")]),
+    )
+    .await?;
+    start_turn_and_wait(&mut mcp, &thread.id, "nonempty replaces").await?;
+    resume_with_dynamic_tools(&mut mcp, &thread.id, Some(Vec::new())).await?;
+    start_turn_and_wait(&mut mcp, &thread.id, "empty clears").await?;
+
+    let bodies = responses_bodies(&server).await?;
+    assert_eq!(bodies.len(), 4);
+    assert!(find_tool(&bodies[0], "catalog_a").is_some());
+    assert!(find_tool(&bodies[1], "catalog_a").is_some());
+    assert!(find_tool(&bodies[2], "catalog_a").is_none());
+    assert!(find_tool(&bodies[2], "catalog_b").is_some());
+    assert!(find_tool(&bodies[3], "catalog_a").is_none());
+    assert!(find_tool(&bodies[3], "catalog_b").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_thread_resume_dynamic_tools_replace_catalog_before_next_turn() -> Result<()> {
+    let responses = (0..2)
+        .map(|index| create_final_assistant_message_sse_response(&format!("turn {index}")))
+        .collect::<Result<Vec<_>>>()?;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let mut first = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, first.initialize()).await??;
+    let started = first
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            dynamic_tools: Some(vec![token_miser_tool("catalog_a")]),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, first.read_response(started)).await??;
+    start_turn_and_wait(&mut first, &thread.id, "materialize").await?;
+    drop(first);
+
+    let mut resumed = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, resumed.initialize()).await??;
+    resume_with_dynamic_tools(
+        &mut resumed,
+        &thread.id,
+        Some(vec![token_miser_tool("catalog_b")]),
+    )
+    .await?;
+    start_turn_and_wait(&mut resumed, &thread.id, "cold replacement").await?;
+
+    let bodies = responses_bodies(&server).await?;
+    assert_eq!(bodies.len(), 2);
+    assert!(find_tool(&bodies[0], "catalog_a").is_some());
+    assert!(find_tool(&bodies[1], "catalog_a").is_none());
+    assert!(find_tool(&bodies[1], "catalog_b").is_some());
 
     Ok(())
 }
@@ -917,6 +1077,43 @@ async fn dynamic_tool_remote_audio_response_becomes_model_visible_error() -> Res
     Ok(())
 }
 
+fn token_miser_tool(name: &str) -> DynamicToolSpec {
+    DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: name.to_string(),
+        description: "Search preserved Token Miser output".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string" }
+            },
+            "required": ["query"],
+            "additionalProperties": false,
+        }),
+        defer_loading: false,
+    })
+}
+
+async fn resume_with_dynamic_tools(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    dynamic_tools: Option<Vec<DynamicToolSpec>>,
+) -> Result<()> {
+    let request_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.to_string(),
+            dynamic_tools,
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: ThreadResumeResponse = to_response(response)?;
+    Ok(())
+}
+
 async fn responses_bodies(server: &MockServer) -> Result<Vec<Value>> {
     let requests = server
         .received_requests()
@@ -931,6 +1128,31 @@ async fn responses_bodies(server: &MockServer) -> Result<Vec<Value>> {
                 .context("request body should be JSON")
         })
         .collect()
+}
+
+async fn start_turn_and_wait(mcp: &mut TestAppServer, thread_id: &str, text: &str) -> Result<()> {
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.to_string(),
+            input: vec![V2UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response(response)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    Ok(())
 }
 
 fn find_tool<'a>(body: &'a Value, name: &str) -> Option<&'a Value> {
