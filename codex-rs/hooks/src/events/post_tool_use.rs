@@ -185,7 +185,7 @@ fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json
         code_mode_cell_id: request.code_mode_cell_id.clone(),
         code_mode_tool_call_id: request.code_mode_tool_call_id.clone(),
         parent_intent: request.parent_intent.clone(),
-        token_miser_acceptance_version: 2,
+        token_miser_acceptance_version: 1,
         token_miser_grouping_version: 1,
     })
 }
@@ -689,7 +689,7 @@ mod tests {
         )
         .expect("parse direct hook input");
         assert_eq!(direct.get("is_code_mode_nested"), Some(&json!(false)));
-        assert_eq!(direct["token_miser_acceptance_version"], 2);
+        assert_eq!(direct["token_miser_acceptance_version"], 1);
         assert_eq!(direct["token_miser_grouping_version"], 1);
         assert_eq!(direct.get("code_mode_cell_id"), None);
         assert_eq!(direct.get("code_mode_tool_call_id"), None);
@@ -705,7 +705,7 @@ mod tests {
         )
         .expect("parse nested hook input");
         assert_eq!(nested.get("is_code_mode_nested"), Some(&json!(true)));
-        assert_eq!(nested["token_miser_acceptance_version"], 2);
+        assert_eq!(nested["token_miser_acceptance_version"], 1);
         assert_eq!(nested["token_miser_grouping_version"], 1);
         assert_eq!(nested["code_mode_cell_id"], "cell-1");
         assert_eq!(nested["code_mode_tool_call_id"], "nested-1");

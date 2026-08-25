@@ -95,25 +95,16 @@ struct Harness {
 
 impl Harness {
     async fn start(timeout: Duration) -> Self {
-        Self::start_with_protocol(timeout, 1).await
-    }
-
-    async fn start_v2(timeout: Duration) -> Self {
-        Self::start_with_protocol(timeout, 2).await
-    }
-
-    async fn start_with_protocol(timeout: Duration, version: u32) -> Self {
         let server = MockServer::start().await;
         let descriptor_dir = TempDir::new().expect("create descriptor dir");
         let descriptor_path = descriptor_dir.path().join("bridge.json");
         std::fs::write(
             &descriptor_path,
             json!({
-                "version": version,
+                "version": 1,
                 "url": format!("{}{REDUCE_PATH}", server.uri()),
                 "token": TOKEN,
-                "acceptance_url": (version == 2)
-                    .then(|| format!("{}{ACCEPT_PATH}", server.uri())),
+                "acceptance_url": format!("{}{ACCEPT_PATH}", server.uri()),
             })
             .to_string(),
         )
@@ -178,8 +169,8 @@ impl Harness {
 }
 
 #[tokio::test]
-async fn direct_post_tool_use_acceptance_uses_the_strict_v2_identity() {
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+async fn direct_post_tool_use_acceptance_uses_the_strict_identity() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
     Mock::given(method("POST"))
         .and(path(ACCEPT_PATH))
         .and(header("authorization", format!("Bearer {TOKEN}").as_str()))
@@ -200,7 +191,7 @@ async fn direct_post_tool_use_acceptance_uses_the_strict_v2_identity() {
     assert_eq!(
         acceptance,
         json!({
-            "version": 2,
+            "version": 1,
             "response_id": "direct-gate-42",
             "session_id": "session-1",
             "turn_id": "turn-1",
@@ -211,7 +202,7 @@ async fn direct_post_tool_use_acceptance_uses_the_strict_v2_identity() {
 
 #[tokio::test]
 async fn direct_post_tool_use_acceptance_failure_is_best_effort() {
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    let harness = Harness::start(Duration::from_secs(5)).await;
     Mock::given(method("POST"))
         .and(path(ACCEPT_PATH))
         .respond_with(ResponseTemplate::new(500))
@@ -224,8 +215,8 @@ async fn direct_post_tool_use_acceptance_failure_is_best_effort() {
 }
 
 #[tokio::test]
-async fn v2_acknowledges_the_accepted_replacement_with_stable_identity() {
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+async fn acknowledges_the_accepted_replacement_with_stable_identity() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -263,7 +254,7 @@ async fn v2_acknowledges_the_accepted_replacement_with_stable_identity() {
     assert_eq!(
         acceptance,
         json!({
-            "version": 2,
+            "version": 1,
             "response_id": "gate-42",
             "thread_id": "thread-1",
             "turn_id": "turn-1",
@@ -274,7 +265,7 @@ async fn v2_acknowledges_the_accepted_replacement_with_stable_identity() {
 }
 
 #[tokio::test]
-async fn v2_acceptance_retries_once_after_a_transient_failure() {
+async fn acceptance_retries_once_after_a_transient_failure() {
     struct FailOnce {
         calls: AtomicUsize,
     }
@@ -289,7 +280,7 @@ async fn v2_acceptance_retries_once_after_a_transient_failure() {
         }
     }
 
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    let harness = Harness::start(Duration::from_secs(5)).await;
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -333,8 +324,8 @@ async fn v2_acceptance_retries_once_after_a_transient_failure() {
 }
 
 #[tokio::test]
-async fn v2_acceptance_response_cannot_revoke_the_committed_replacement() {
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+async fn acceptance_response_cannot_revoke_the_committed_replacement() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -397,6 +388,7 @@ async fn healthy_reducer_replaces_output_and_fences_it() {
         .and(path(REDUCE_PATH))
         .and(header("authorization", format!("Bearer {TOKEN}").as_str()))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "healthy-gate",
             "replacement": [
                 { "type": "input_text", "text": "3 files listed; full output preserved as tm-42." }
             ]
@@ -424,7 +416,7 @@ async fn reduction_request_carries_the_full_original_and_its_identifiers() {
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "replacement": [{ "type": "input_text", "text": "summary" }]
+            "replacement": null
         })))
         .mount(&harness.server)
         .await;
@@ -446,9 +438,8 @@ async fn reduction_request_carries_the_full_original_and_its_identifiers() {
     assert_eq!(body["cell_id"], json!("cell-1"));
     assert_eq!(body["script_status"], json!("Script completed"));
     assert_eq!(
-        body.get("parent_intent"),
-        None,
-        "legacy protocol v1 requests must remain byte-shape compatible"
+        body["parent_intent"],
+        "List the repository files for review."
     );
     // The reducer needs to know what produced the output to summarize it well.
     assert_eq!(
@@ -464,8 +455,8 @@ async fn reduction_request_carries_the_full_original_and_its_identifiers() {
 }
 
 #[tokio::test]
-async fn v2_reduction_request_includes_parent_intent() {
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+async fn reduction_request_includes_parent_intent() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -489,8 +480,8 @@ async fn v2_reduction_request_includes_parent_intent() {
 }
 
 #[tokio::test]
-async fn v2_reduction_request_omits_absent_parent_intent() {
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+async fn reduction_request_omits_absent_parent_intent() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -520,8 +511,8 @@ async fn v2_reduction_request_omits_absent_parent_intent() {
 }
 
 #[tokio::test]
-async fn v2_reducer_must_echo_actionable_state_before_its_replacement_is_selected() {
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+async fn reducer_must_echo_actionable_state_before_its_replacement_is_selected() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
     let actionable_state = running_actionable_state();
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
@@ -564,8 +555,8 @@ async fn v2_reducer_must_echo_actionable_state_before_its_replacement_is_selecte
 }
 
 #[tokio::test]
-async fn v2_reducer_that_loses_actionable_state_fails_open_without_acceptance() {
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+async fn reducer_that_loses_actionable_state_fails_open_without_acceptance() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -599,8 +590,8 @@ async fn v2_reducer_that_loses_actionable_state_fails_open_without_acceptance() 
 }
 
 #[tokio::test]
-async fn v2_reducer_that_conflicts_with_actionable_state_fails_open() {
-    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+async fn reducer_that_conflicts_with_actionable_state_fails_open() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
     let actionable_state = running_actionable_state();
     let mut conflicting_state = json!(actionable_state);
     conflicting_state["entries"][0]["process_id"] = json!(9_999);
@@ -626,32 +617,6 @@ async fn v2_reducer_that_conflicts_with_actionable_state_fails_open() {
     assert_eq!(reduced, expected);
 }
 
-#[tokio::test]
-async fn v1_reducer_with_actionable_state_fails_open_without_changing_its_request_contract() {
-    let harness = Harness::start(Duration::from_secs(5)).await;
-    let actionable_state = running_actionable_state();
-    let mut reduction_context = context();
-    reduction_context.actionable_state = Some(actionable_state.clone());
-    let original = large_original();
-
-    let reduced = harness
-        .reduce_with_context(&reduction_context, original.clone())
-        .await;
-
-    let mut expected = truncate_code_mode_result(original, None);
-    expected.push(actionable_state.output_item());
-    assert_eq!(reduced, expected);
-    assert!(
-        harness
-            .server
-            .received_requests()
-            .await
-            .expect("recorded requests")
-            .is_empty(),
-        "Codex must not send a v2-only field to a legacy reducer"
-    );
-}
-
 /// A cell whose script is no longer known omits the field rather than sending
 /// an empty string, so a host can tell the two apart.
 #[tokio::test]
@@ -660,7 +625,7 @@ async fn reduction_request_omits_an_unknown_script() {
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "replacement": [{ "type": "input_text", "text": "summary" }]
+            "replacement": null
         })))
         .mount(&harness.server)
         .await;
@@ -878,6 +843,7 @@ async fn host_ceiling_bounds_the_replacement_too() {
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "bounded-replacement-gate",
             "replacement": [{ "type": "input_text", "text": "a ".repeat(4_000) }]
         })))
         .mount(&harness.server)

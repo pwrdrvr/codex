@@ -17,8 +17,8 @@
 //!   is the existing truncation call, byte for byte.
 //! - **Fails open during reduction.** Missing descriptor, unreachable host, timeout, non-2xx,
 //!   malformed body, oversized body, empty replacement — every one falls back to truncation. Once
-//!   a valid v2 replacement is committed, its acceptance callback response cannot revoke it.
-//! - **Actionable state is Codex-owned.** A protocol-v2 reducer must echo nested unified-exec
+//!   a valid replacement is committed, its acceptance callback response cannot revoke it.
+//! - **Actionable state is Codex-owned.** A reducer must echo nested unified-exec
 //!   continuation state exactly. Codex rejects a missing or conflicting echo and appends the
 //!   authoritative bounded envelope outside both the replacement fence and replacement budget.
 //! - **Budget always enforced.** The replacement is truncated with the same policy as the
@@ -40,8 +40,7 @@ use crate::tools::code_mode::actionable_state::ActionableState;
 use crate::unified_exec::resolve_max_tokens;
 
 /// Wire version for both the descriptor file and the reduction request/response envelopes.
-const REDUCER_PROTOCOL_VERSION: u32 = 2;
-const LEGACY_REDUCER_PROTOCOL_VERSION: u32 = 1;
+const REDUCER_PROTOCOL_VERSION: u32 = 1;
 const ACCEPTANCE_MAX_ATTEMPTS: u32 = 2;
 const ACCEPTANCE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 
@@ -89,11 +88,11 @@ pub(super) struct ReductionContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
     /// Bounded visible narration preceding the outer Code Mode call. Serialized
-    /// explicitly only for protocol v2 requests below.
+    /// explicitly in the reducer request below.
     #[serde(skip)]
     pub parent_intent: Option<String>,
     /// Bounded process continuation state derived from Codex-owned nested tool
-    /// results. Serialized explicitly only for protocol v2 requests below.
+    /// results. Serialized explicitly in the reducer request below.
     #[serde(skip)]
     pub actionable_state: Option<ActionableState>,
     /// The `Script completed` / `Script running with cell ID ...` line, before it is prepended.
@@ -216,8 +215,7 @@ struct ReducerDescriptor {
     version: u32,
     url: String,
     token: String,
-    #[serde(default)]
-    acceptance_url: Option<String>,
+    acceptance_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -238,10 +236,10 @@ struct ReductionResponse {
     /// `null` or absent means "no replacement"; the caller keeps the original.
     #[serde(default)]
     replacement: Option<Vec<FunctionCallOutputContentItem>>,
-    /// Stable host identity for this staged gate. Required by protocol v2.
+    /// Stable host identity for this staged gate.
     #[serde(default)]
     response_id: Option<String>,
-    /// Protocol-v2 hosts must echo the request envelope exactly. Keeping this
+    /// Hosts must echo the request envelope exactly. Keeping this
     /// as JSON preserves absence/null and catches any field-level conflict.
     #[serde(default)]
     actionable_state: Option<serde_json::Value>,
@@ -369,27 +367,16 @@ impl HttpCodeModeOutputReducer {
         }
 
         let descriptor = read_descriptor(&self.config.descriptor_path).await?;
-        if context.actionable_state.is_some() && descriptor.version != REDUCER_PROTOCOL_VERSION {
-            tracing::warn!(
-                version = descriptor.version,
-                "legacy code-mode reducer cannot preserve actionable state; falling back"
-            );
-            return None;
-        }
         let request = ReductionRequest {
             version: descriptor.version,
             context,
-            parent_intent: (descriptor.version == REDUCER_PROTOCOL_VERSION)
-                .then_some(context.parent_intent.as_deref())
-                .flatten(),
-            actionable_state: (descriptor.version == REDUCER_PROTOCOL_VERSION)
-                .then_some(context.actionable_state.as_ref())
-                .flatten(),
+            parent_intent: context.parent_intent.as_deref(),
+            actionable_state: context.actionable_state.as_ref(),
             max_output_tokens,
             content_items: items,
         };
 
-        // One budget for reduction plus the optional v2 acceptance callback. Splitting it per
+        // One budget for reduction plus the acceptance callback. Splitting it per
         // stage would let a slow reducer spend the timeout more than once.
         let deadline = tokio::time::Instant::now() + self.config.timeout;
         let body = tokio::time::timeout_at(deadline, async {
@@ -456,48 +443,45 @@ impl HttpCodeModeOutputReducer {
             tracing::warn!("code-mode output reducer returned an empty replacement");
             return None;
         }
-        if descriptor.version == REDUCER_PROTOCOL_VERSION {
-            let expected_actionable_state = context
-                .actionable_state
-                .as_ref()
-                .map(ActionableState::to_json_value);
-            if parsed.actionable_state != expected_actionable_state {
-                tracing::warn!(
-                    "code-mode output reducer v2 response lost or conflicted with actionable state"
-                );
-                return None;
-            }
-            let response_id = parsed
-                .response_id
-                .as_deref()
-                .and_then(|response_id| (!response_id.trim().is_empty()).then_some(response_id))
-                .or_else(|| {
-                    tracing::warn!(
-                        "code-mode output reducer v2 response omitted a non-empty response_id"
-                    );
-                    None
-                })?;
-            let acceptance_url = descriptor.acceptance_url.as_deref()?;
-            let acceptance = ReductionAcceptance {
-                version: REDUCER_PROTOCOL_VERSION,
-                response_id,
-                thread_id: &context.thread_id,
-                turn_id: &context.turn_id,
-                call_id: &context.call_id,
-                cell_id: &context.cell_id,
-            };
-            // This is a one-way commit notification. Once the request is attempted, Codex must
-            // keep the replacement even if every bounded attempt is lost: the host may already
-            // have received one and finalized its staged gate.
-            self.post_acceptance(
-                &descriptor,
-                acceptance_url,
-                response_id,
-                &acceptance,
-                deadline,
-            )
-            .await;
+        let expected_actionable_state = context
+            .actionable_state
+            .as_ref()
+            .map(ActionableState::to_json_value);
+        if parsed.actionable_state != expected_actionable_state {
+            tracing::warn!(
+                "code-mode output reducer response lost or conflicted with actionable state"
+            );
+            return None;
         }
+        let response_id = parsed
+            .response_id
+            .as_deref()
+            .and_then(|response_id| (!response_id.trim().is_empty()).then_some(response_id))
+            .or_else(|| {
+                tracing::warn!(
+                    "code-mode output reducer response omitted a non-empty response_id"
+                );
+                None
+            })?;
+        let acceptance = ReductionAcceptance {
+            version: REDUCER_PROTOCOL_VERSION,
+            response_id,
+            thread_id: &context.thread_id,
+            turn_id: &context.turn_id,
+            call_id: &context.call_id,
+            cell_id: &context.cell_id,
+        };
+        // This is a one-way commit notification. Once the request is attempted, Codex must
+        // keep the replacement even if every bounded attempt is lost: the host may already
+        // have received one and finalized its staged gate.
+        self.post_acceptance(
+            &descriptor,
+            &descriptor.acceptance_url,
+            response_id,
+            &acceptance,
+            deadline,
+        )
+        .await;
         Some(replacement)
     }
 
@@ -508,9 +492,6 @@ impl HttpCodeModeOutputReducer {
         if descriptor.version != REDUCER_PROTOCOL_VERSION {
             return;
         }
-        let Some(acceptance_url) = descriptor.acceptance_url.as_deref() else {
-            return;
-        };
         let acceptance = PostToolUseAcceptance {
             version: REDUCER_PROTOCOL_VERSION,
             response_id: context.response_id,
@@ -520,7 +501,7 @@ impl HttpCodeModeOutputReducer {
         };
         self.post_acceptance(
             &descriptor,
-            acceptance_url,
+            &descriptor.acceptance_url,
             context.response_id,
             &acceptance,
             tokio::time::Instant::now() + self.config.timeout,
@@ -564,19 +545,12 @@ async fn read_descriptor(path: &Path) -> Option<ReducerDescriptor> {
             tracing::warn!(%error, "code-mode output reducer descriptor is malformed");
         })
         .ok()?;
-    if !matches!(
-        descriptor.version,
-        LEGACY_REDUCER_PROTOCOL_VERSION | REDUCER_PROTOCOL_VERSION
-    ) {
+    if descriptor.version != REDUCER_PROTOCOL_VERSION {
         tracing::warn!(
             version = descriptor.version,
             expected = REDUCER_PROTOCOL_VERSION,
             "code-mode output reducer descriptor version is unsupported"
         );
-        return None;
-    }
-    if descriptor.version == REDUCER_PROTOCOL_VERSION && descriptor.acceptance_url.is_none() {
-        tracing::warn!("code-mode output reducer v2 descriptor omitted acceptance_url");
         return None;
     }
     Some(descriptor)

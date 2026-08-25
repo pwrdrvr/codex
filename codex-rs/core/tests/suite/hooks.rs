@@ -4078,7 +4078,7 @@ try {{
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
     assert_eq!(hook_inputs[0]["is_code_mode_nested"], true);
-    assert_eq!(hook_inputs[0]["token_miser_acceptance_version"], 2);
+    assert_eq!(hook_inputs[0]["token_miser_acceptance_version"], 1);
     assert_eq!(hook_inputs[0]["token_miser_grouping_version"], 1);
     assert_eq!(hook_inputs[0]["parent_intent"], parent_intent);
     assert!(!hook_inputs[0].to_string().contains(hidden_reasoning));
@@ -4965,7 +4965,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     assert_eq!(hook_input["tool_name"], "Bash");
     assert_eq!(hook_input["tool_input"]["command"], command);
     assert_eq!(hook_input["is_code_mode_nested"], false);
-    assert_eq!(hook_input["token_miser_acceptance_version"], 2);
+    assert_eq!(hook_input["token_miser_acceptance_version"], 1);
     assert_eq!(hook_input["token_miser_grouping_version"], 1);
     assert_eq!(hook_input["parent_intent"], parent_intent);
     assert!(!hook_input.to_string().contains(hidden_reasoning));

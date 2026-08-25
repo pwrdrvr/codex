@@ -200,15 +200,29 @@ jobs:
                   send({"method": "initialized", "params": {}})
                   send({"method": "server/capabilities/read", "id": 2, "params": {}})
                   capability = response(2)["codeModeOutputReducer"]
-                  assert capability["protocolVersion"] == 2, capability
+                  assert capability["protocolVersion"] == 1, capability
+                  assert capability["continuationGuidanceVersion"] == 1, capability
+                  assert capability["intentContextVersion"] == 1, capability
+                  assert capability["reducerRequestField"] == "parent_intent", capability
+                  assert capability["postToolUseField"] == "parent_intent", capability
+                  actionable = capability["actionableState"]
+                  assert actionable["version"] == 1, capability
+                  assert actionable["reducerRequestField"] == "actionable_state", capability
+                  assert actionable["reducerResponseField"] == "actionable_state", capability
+                  assert actionable["modelOutputTag"] == "codex_actionable_state", capability
                   assert capability["postToolUseNestedContextField"] == "is_code_mode_nested", capability
+                  grouping = capability["postToolUseGrouping"]
+                  assert grouping["versionField"] == "token_miser_grouping_version", capability
+                  assert grouping["version"] == 1, capability
+                  assert grouping["cellIdField"] == "code_mode_cell_id", capability
+                  assert grouping["toolCallIdField"] == "code_mode_tool_call_id", capability
                   assert capability["supportsThreadResumeOverrides"] is True, capability
                   assert capability["dynamicToolsResumeField"] == "dynamicTools", capability
-                  assert capability["acceptance"]["callbackVersion"] == 2, capability
+                  assert capability["acceptance"]["callbackVersion"] == 1, capability
                   direct = capability["acceptance"]["directPostToolUse"]
                   assert direct["hookResponseIdField"] == "hookSpecificOutput.response_id", capability
                   assert direct["hookAcceptanceVersionField"] == "token_miser_acceptance_version", capability
-                  assert direct["hookAcceptanceVersion"] == 2, capability
+                  assert direct["hookAcceptanceVersion"] == 1, capability
                   assert direct["sessionIdField"] == "session_id", capability
                   assert direct["turnIdField"] == "turn_id", capability
                   assert direct["toolUseIdField"] == "tool_use_id", capability

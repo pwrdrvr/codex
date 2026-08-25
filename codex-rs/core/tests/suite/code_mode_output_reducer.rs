@@ -109,6 +109,7 @@ fn write_descriptor(dir: &TempDir, server: &MockServer) -> std::path::PathBuf {
         serde_json::json!({
             "version": 1,
             "url": format!("{}{REDUCE_PATH}", server.uri()),
+            "acceptance_url": format!("{}{ACCEPT_PATH}", server.uri()),
             "token": BRIDGE_TOKEN,
         })
         .to_string(),
@@ -310,11 +311,17 @@ async fn a_configured_reducer_replaces_what_the_model_reads() -> Result<()> {
     Mock::given(method("POST"))
         .and(path(REDUCE_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "response_id": "configured-gate-1",
             "replacement": [{
                 "type": "input_text",
                 "text": "200 identical stack frames; full output preserved as tm-1.",
             }]
         })))
+        .mount(&bridge)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .respond_with(ResponseTemplate::new(204))
         .mount(&bridge)
         .await;
     let dir = TempDir::new()?;
@@ -339,14 +346,14 @@ async fn a_configured_reducer_replaces_what_the_model_reads() -> Result<()> {
     // The bridge must have been told what produced the output, not just handed
     // an anonymous blob.
     let requests = bridge.received_requests().await.expect("recorded requests");
-    assert_eq!(requests.len(), 1, "exactly one reduction per cell");
-    let body: Value = serde_json::from_slice(&requests[0].body)?;
+    let reductions = requests
+        .iter()
+        .filter(|request| request.url.path() == REDUCE_PATH)
+        .collect::<Vec<_>>();
+    assert_eq!(reductions.len(), 1, "exactly one reduction per cell");
+    let body: Value = serde_json::from_slice(&reductions[0].body)?;
     assert_eq!(body["version"], serde_json::json!(1));
-    assert_eq!(
-        body.get("parent_intent"),
-        None,
-        "protocol v1 request shape must remain unchanged"
-    );
+    assert_eq!(body["parent_intent"], CODE_MODE_PARENT_INTENT);
     assert!(
         body["script"]
             .as_str()
@@ -390,7 +397,7 @@ async fn a_configured_reducer_tells_the_model_to_preserve_parallel_batching() ->
 
 /// Reducer selection happens after the code cell has finished. The same
 /// hand-written `Promise.all` cell must therefore dispatch nested operations
-/// concurrently with or without a reducer, and protocol v2 must acknowledge
+/// concurrently with or without a reducer, and the reducer must acknowledge
 /// exactly the replacement Codex put into model context.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_replacement()
@@ -438,7 +445,7 @@ async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_repl
     std::fs::write(
         &descriptor_path,
         serde_json::json!({
-            "version": 2,
+            "version": 1,
             "url": format!("{}{REDUCE_PATH}", bridge.uri()),
             "acceptance_url": format!("{}{ACCEPT_PATH}", bridge.uri()),
             "token": BRIDGE_TOKEN,
@@ -476,7 +483,7 @@ async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_repl
         .expect("acceptance request");
     let reduction: Value = serde_json::from_slice(&reduction_request.body)?;
     let acceptance: Value = serde_json::from_slice(&acceptance_request.body)?;
-    assert_eq!(reduction["version"], serde_json::json!(2));
+    assert_eq!(reduction["version"], serde_json::json!(1));
     assert_eq!(reduction["parent_intent"], CODE_MODE_PARENT_INTENT);
     assert!(!reduction.to_string().contains(HIDDEN_REASONING));
     assert_eq!(
@@ -493,7 +500,7 @@ async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_repl
     assert_eq!(
         acceptance,
         serde_json::json!({
-            "version": 2,
+            "version": 1,
             "response_id": "parallel-gate-1",
             "thread_id": reduction["thread_id"],
             "turn_id": reduction["turn_id"],
@@ -507,7 +514,7 @@ async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_repl
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn v2_reducer_preserves_two_yielded_sessions_for_the_next_code_mode_cell() -> Result<()> {
+async fn reducer_preserves_two_yielded_sessions_for_the_next_code_mode_cell() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let bridge = MockServer::start().await;
@@ -532,7 +539,7 @@ async fn v2_reducer_preserves_two_yielded_sessions_for_the_next_code_mode_cell()
     std::fs::write(
         &descriptor_path,
         serde_json::json!({
-            "version": 2,
+            "version": 1,
             "url": format!("{}{REDUCE_PATH}", bridge.uri()),
             "acceptance_url": format!("{}{ACCEPT_PATH}", bridge.uri()),
             "token": BRIDGE_TOKEN,

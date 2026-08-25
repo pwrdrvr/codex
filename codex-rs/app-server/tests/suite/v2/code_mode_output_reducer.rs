@@ -119,7 +119,7 @@ async fn loaded_resume_before_first_turn_activates_reducer_and_dynamic_tools() -
     std::fs::write(
         &descriptor_path,
         json!({
-            "version": 2,
+            "version": 1,
             "url": format!("{}{REDUCE_PATH}", reducer.uri()),
             "token": "integration-test-token",
             "acceptance_url": format!("{}{ACCEPT_PATH}", reducer.uri()),

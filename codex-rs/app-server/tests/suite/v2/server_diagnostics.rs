@@ -47,7 +47,7 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
         capabilities,
         ServerCapabilitiesReadResponse {
             code_mode_output_reducer: CodeModeOutputReducerCapability {
-                protocol_version: 2,
+                protocol_version: 1,
                 continuation_guidance_version: 1,
                 intent_context_version: 1,
                 reducer_request_field: "parent_intent".to_string(),
@@ -73,11 +73,11 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
                 acceptance: CodeModeOutputReducerAcceptanceCapability {
                     descriptor_url_field: "acceptance_url".to_string(),
                     response_id_field: "response_id".to_string(),
-                    callback_version: 2,
+                    callback_version: 1,
                     direct_post_tool_use: DirectPostToolUseAcceptanceCapability {
                         hook_response_id_field: "hookSpecificOutput.response_id".to_string(),
                         hook_acceptance_version_field: "token_miser_acceptance_version".to_string(),
-                        hook_acceptance_version: 2,
+                        hook_acceptance_version: 1,
                         session_id_field: "session_id".to_string(),
                         turn_id_field: "turn_id".to_string(),
                         tool_use_id_field: "tool_use_id".to_string(),
