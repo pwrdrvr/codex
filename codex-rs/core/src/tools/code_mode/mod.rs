@@ -1,3 +1,4 @@
+mod actionable_state;
 mod delegate;
 mod execute_handler;
 pub(crate) mod execute_spec;
@@ -49,6 +50,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 
+use actionable_state::ActionableStateStore;
 use delegate::CodeModeDispatchBroker;
 use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
@@ -94,6 +96,10 @@ pub(crate) struct CodeModeService {
     /// The outer `exec` narration inherited by reducer requests and nested
     /// PostToolUse calls for the lifetime of a Code Mode cell.
     cell_parent_intents: Mutex<HashMap<CellId, Arc<str>>>,
+    /// Codex-owned process handles observed in nested unified-exec results.
+    /// Reducers can summarize the accompanying output but cannot replace this
+    /// state without echoing it exactly.
+    actionable_states: ActionableStateStore,
     shutting_down: AtomicBool,
     unavailable_warning_emitted: AtomicBool,
 }
@@ -135,6 +141,7 @@ impl CodeModeService {
             cell_scripts: Mutex::new(HashMap::new()),
             direct_parent_intents: Mutex::new(HashMap::new()),
             cell_parent_intents: Mutex::new(HashMap::new()),
+            actionable_states: ActionableStateStore::default(),
             shutting_down: AtomicBool::new(false),
             unavailable_warning_emitted: AtomicBool::new(false),
         }
@@ -167,6 +174,9 @@ impl CodeModeService {
             && let Ok(mut scripts) = self.cell_scripts.lock()
         {
             scripts.clear();
+        }
+        if next.output_reducer.is_none() {
+            self.actionable_states.clear();
         }
         *self
             .reduction_config
@@ -298,6 +308,7 @@ impl CodeModeService {
         if let Ok(mut intents) = self.cell_parent_intents.lock() {
             intents.clear();
         }
+        self.actionable_states.clear();
         let Some(session) = self.session.get() else {
             return;
         };
@@ -398,7 +409,7 @@ pub(super) async fn handle_runtime_response(
     let is_terminal = !matches!(response, RuntimeResponse::Yielded { .. });
     let service = &exec.session.services.code_mode_service;
     // Scoped so the borrow of `response` ends before the match below moves it.
-    let (cell_id, script, parent_intent) = {
+    let (cell_id, script, parent_intent, actionable_state) = {
         let cell_id = response_cell_id(&response);
         let parent_intent = {
             let mut intents = service.cell_parent_intents.lock().ok();
@@ -416,6 +427,7 @@ pub(super) async fn handle_runtime_response(
                 .cell_script(cell_id, is_terminal)
                 .map(|script| script.to_string()),
             parent_intent.map(|parent_intent| parent_intent.to_string()),
+            service.actionable_states.read(cell_id, is_terminal),
         )
     };
     // The script-to-model boundary: everything below is what enters model context, as opposed to
@@ -429,6 +441,7 @@ pub(super) async fn handle_runtime_response(
         // produced it.
         script,
         parent_intent,
+        actionable_state,
         cell_id,
         script_status: script_status.clone(),
     };
@@ -568,13 +581,14 @@ async fn call_nested_tool(
         )));
     }
 
+    let actionable_state_input = input.clone();
     let payload = match build_nested_tool_payload(tool_kind, &tool_name, input) {
         Ok(payload) => payload,
         Err(error) => return Err(FunctionCallError::RespondToModel(error)),
     };
 
     let call = ToolCall {
-        tool_name: tool_name.with_default_namespace(),
+        tool_name: tool_name.clone().with_default_namespace(),
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
         payload,
         encrypted_function_args: None,
@@ -598,7 +612,17 @@ async fn call_nested_tool(
             cancellation_token,
         )
         .await?;
-    Ok(result.code_mode_result())
+    let result = result.code_mode_result();
+    let service = &exec.session.services.code_mode_service;
+    if service.reduction_config().output_reducer.is_some() {
+        service.actionable_states.record(
+            &cell_id,
+            &tool_name,
+            actionable_state_input.as_ref(),
+            &result,
+        );
+    }
+    Ok(result)
 }
 
 fn build_nested_tool_payload(

@@ -52,6 +52,7 @@ export type { ChatgptAuthTokensRefreshParams } from "./ChatgptAuthTokensRefreshP
 export type { ChatgptAuthTokensRefreshReason } from "./ChatgptAuthTokensRefreshReason";
 export type { ChatgptAuthTokensRefreshResponse } from "./ChatgptAuthTokensRefreshResponse";
 export type { CliAuthCredentialsStoreMode } from "./CliAuthCredentialsStoreMode";
+export type { CodeModeActionableStateCapability } from "./CodeModeActionableStateCapability";
 export type { CodeModeOutputReducerAcceptanceCapability } from "./CodeModeOutputReducerAcceptanceCapability";
 export type { CodeModeOutputReducerCapability } from "./CodeModeOutputReducerCapability";
 export type { CodeModePostToolUseGroupingCapability } from "./CodeModePostToolUseGroupingCapability";

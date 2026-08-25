@@ -18,6 +18,9 @@
 //! - **Fails open during reduction.** Missing descriptor, unreachable host, timeout, non-2xx,
 //!   malformed body, oversized body, empty replacement — every one falls back to truncation. Once
 //!   a valid v2 replacement is committed, its acceptance callback response cannot revoke it.
+//! - **Actionable state is Codex-owned.** A protocol-v2 reducer must echo nested unified-exec
+//!   continuation state exactly. Codex rejects a missing or conflicting echo and appends the
+//!   authoritative bounded envelope outside both the replacement fence and replacement budget.
 //! - **Budget always enforced.** The replacement is truncated with the same policy as the
 //!   original, so a reducer cannot enlarge what reaches the model.
 //! - **Replacement is untrusted.** See [`UNTRUSTED_REPLACEMENT_HEADER`].
@@ -33,6 +36,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::CodeModeOutputReducerConfig;
+use crate::tools::code_mode::actionable_state::ActionableState;
 use crate::unified_exec::resolve_max_tokens;
 
 /// Wire version for both the descriptor file and the reduction request/response envelopes.
@@ -88,6 +92,10 @@ pub(super) struct ReductionContext {
     /// explicitly only for protocol v2 requests below.
     #[serde(skip)]
     pub parent_intent: Option<String>,
+    /// Bounded process continuation state derived from Codex-owned nested tool
+    /// results. Serialized explicitly only for protocol v2 requests below.
+    #[serde(skip)]
+    pub actionable_state: Option<ActionableState>,
     /// The `Script completed` / `Script running with cell ID ...` line, before it is prepended.
     pub script_status: String,
 }
@@ -148,12 +156,20 @@ pub(super) async fn apply_output_reduction(
 ) -> Vec<FunctionCallOutputContentItem> {
     let max_output_tokens = clamp_max_output_tokens(max_output_tokens, ceiling);
     let Some(reducer) = reducer else {
-        return super::truncate_code_mode_result(items, max_output_tokens);
+        return truncate_and_append_actionable_state(
+            items,
+            max_output_tokens,
+            context.actionable_state.as_ref(),
+        );
     };
     let budget = resolve_max_tokens(max_output_tokens);
     let replacement = reducer.reduce(context, &items, budget).await;
     let Some(replacement) = replacement else {
-        return super::truncate_code_mode_result(items, max_output_tokens);
+        return truncate_and_append_actionable_state(
+            items,
+            max_output_tokens,
+            context.actionable_state.as_ref(),
+        );
     };
     // Truncate the replacement under the same policy: the budget is the host's, not the reducer's.
     let mut reduced =
@@ -161,7 +177,22 @@ pub(super) async fn apply_output_reduction(
     reduced.push(FunctionCallOutputContentItem::InputText {
         text: OUTPUT_REDUCTION_CONTINUATION_GUIDANCE.to_string(),
     });
+    if let Some(actionable_state) = &context.actionable_state {
+        reduced.push(actionable_state.output_item());
+    }
     reduced
+}
+
+fn truncate_and_append_actionable_state(
+    items: Vec<FunctionCallOutputContentItem>,
+    max_output_tokens: Option<usize>,
+    actionable_state: Option<&ActionableState>,
+) -> Vec<FunctionCallOutputContentItem> {
+    let mut output = super::truncate_code_mode_result(items, max_output_tokens);
+    if let Some(actionable_state) = actionable_state {
+        output.push(actionable_state.output_item());
+    }
+    output
 }
 
 /// Wraps a replacement so the parent model reads it as data rather than as instructions.
@@ -196,6 +227,8 @@ struct ReductionRequest<'a> {
     context: &'a ReductionContext,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent_intent: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actionable_state: Option<&'a ActionableState>,
     max_output_tokens: usize,
     content_items: &'a [FunctionCallOutputContentItem],
 }
@@ -208,6 +241,10 @@ struct ReductionResponse {
     /// Stable host identity for this staged gate. Required by protocol v2.
     #[serde(default)]
     response_id: Option<String>,
+    /// Protocol-v2 hosts must echo the request envelope exactly. Keeping this
+    /// as JSON preserves absence/null and catches any field-level conflict.
+    #[serde(default)]
+    actionable_state: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -332,11 +369,21 @@ impl HttpCodeModeOutputReducer {
         }
 
         let descriptor = read_descriptor(&self.config.descriptor_path).await?;
+        if context.actionable_state.is_some() && descriptor.version != REDUCER_PROTOCOL_VERSION {
+            tracing::warn!(
+                version = descriptor.version,
+                "legacy code-mode reducer cannot preserve actionable state; falling back"
+            );
+            return None;
+        }
         let request = ReductionRequest {
             version: descriptor.version,
             context,
             parent_intent: (descriptor.version == REDUCER_PROTOCOL_VERSION)
                 .then_some(context.parent_intent.as_deref())
+                .flatten(),
+            actionable_state: (descriptor.version == REDUCER_PROTOCOL_VERSION)
+                .then_some(context.actionable_state.as_ref())
                 .flatten(),
             max_output_tokens,
             content_items: items,
@@ -410,6 +457,16 @@ impl HttpCodeModeOutputReducer {
             return None;
         }
         if descriptor.version == REDUCER_PROTOCOL_VERSION {
+            let expected_actionable_state = context
+                .actionable_state
+                .as_ref()
+                .map(ActionableState::to_json_value);
+            if parsed.actionable_state != expected_actionable_state {
+                tracing::warn!(
+                    "code-mode output reducer v2 response lost or conflicted with actionable state"
+                );
+                return None;
+            }
             let response_id = parsed
                 .response_id
                 .as_deref()

@@ -27,10 +27,14 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Request;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
@@ -61,6 +65,41 @@ const results = await Promise.all([
 
 text(JSON.stringify({ results, padding: "parallel-output-".repeat(300) }));
 "#;
+const YIELDED_SESSIONS_SCRIPT: &str = r#"// @exec: {"max_output_tokens": 2048}
+const sessions = await Promise.all([
+  tools.exec_command({ cmd: "sleep 2; printf session-one-done", yield_time_ms: 250 }),
+  tools.exec_command({ cmd: "sleep 2; printf session-two-done", yield_time_ms: 250 }),
+]);
+
+text(JSON.stringify({ sessions, padding: "yielded-session-output-".repeat(300) }));
+"#;
+const POLL_EXACT_SESSIONS_SCRIPT: &str = r#"// @exec: {"max_output_tokens": 2048}
+const results = await Promise.all([
+  tools.write_stdin({ session_id: 1000, chars: "", yield_time_ms: 5000 }),
+  tools.write_stdin({ session_id: 1001, chars: "", yield_time_ms: 5000 }),
+]);
+
+text(JSON.stringify({ results, padding: "completed-session-output-".repeat(300) }));
+"#;
+
+struct EchoActionableStateReducer {
+    calls: AtomicUsize,
+}
+
+impl Respond for EchoActionableStateReducer {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let body: Value = serde_json::from_slice(&request.body).expect("reduction request JSON");
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "response_id": format!("actionable-state-gate-{call}"),
+            "actionable_state": body["actionable_state"],
+            "replacement": [{
+                "type": "input_text",
+                "text": format!("selected actionable-state reducer replacement {call}"),
+            }],
+        }))
+    }
+}
 
 /// Writes the descriptor a host would write, pointing at `server`.
 fn write_descriptor(dir: &TempDir, server: &MockServer) -> std::path::PathBuf {
@@ -210,14 +249,21 @@ fn output_text(output: &Value) -> String {
 /// source, which contains the very text these tests look for. Two of these
 /// tests passed that way while `exec` was not even registered.
 fn model_visible_tool_output(body: &Value) -> String {
+    model_visible_tool_output_for_call(body, "call-1")
+}
+
+fn model_visible_tool_output_for_call(body: &Value, call_id: &str) -> String {
     let outputs: Vec<String> = body["input"]
         .as_array()
         .expect("request should carry input items")
         .iter()
-        .filter(|item| item["type"] == "custom_tool_call_output" && item["call_id"] == "call-1")
+        .filter(|item| item["type"] == "custom_tool_call_output" && item["call_id"] == call_id)
         .map(|item| output_text(&item["output"]))
         .collect();
-    assert!(!outputs.is_empty(), "no tool output for call-1 in: {body}");
+    assert!(
+        !outputs.is_empty(),
+        "no tool output for {call_id} in: {body}"
+    );
     let joined = outputs.concat();
     assert!(
         !joined.is_empty(),
@@ -455,6 +501,147 @@ async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_repl
             "cell_id": reduction["cell_id"],
         })
     );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_reducer_preserves_two_yielded_sessions_for_the_next_code_mode_cell() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let bridge = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .and(header(
+            "authorization",
+            format!("Bearer {BRIDGE_TOKEN}").as_str(),
+        ))
+        .respond_with(EchoActionableStateReducer {
+            calls: AtomicUsize::new(0),
+        })
+        .mount(&bridge)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&bridge)
+        .await;
+    let descriptor_dir = TempDir::new()?;
+    let descriptor_path = descriptor_dir.path().join("bridge.json");
+    std::fs::write(
+        &descriptor_path,
+        serde_json::json!({
+            "version": 2,
+            "url": format!("{}{REDUCE_PATH}", bridge.uri()),
+            "acceptance_url": format!("{}{ACCEPT_PATH}", bridge.uri()),
+            "token": BRIDGE_TOKEN,
+        })
+        .to_string(),
+    )?;
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-parent-intent", CODE_MODE_PARENT_INTENT),
+                ev_custom_tool_call("call-1", "exec", YIELDED_SESSIONS_SCRIPT),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_custom_tool_call("call-2", "exec", POLL_EXACT_SESSIONS_SCRIPT),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
+            config.code_mode.output_reducer = Some(reducer_config(descriptor_path));
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("run and then poll two independent validations")
+        .await?;
+
+    let requests = bridge.received_requests().await.expect("recorded requests");
+    let reductions = requests
+        .iter()
+        .filter(|request| request.url.path() == REDUCE_PATH)
+        .map(|request| serde_json::from_slice::<Value>(&request.body))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(reductions.len(), 2, "both large cell outputs are reduced");
+    let running_reduction = reductions
+        .iter()
+        .find(|request| {
+            request["script"]
+                .as_str()
+                .is_some_and(|script| script.contains("tools.exec_command"))
+        })
+        .expect("running-session reduction");
+    let completed_reduction = reductions
+        .iter()
+        .find(|request| {
+            request["script"]
+                .as_str()
+                .is_some_and(|script| script.contains("tools.write_stdin"))
+        })
+        .expect("completed-session reduction");
+
+    let running_entries = running_reduction["actionable_state"]["entries"]
+        .as_array()
+        .expect("running actionable entries");
+    assert_eq!(running_entries.len(), 2);
+    for (entry, session_id) in running_entries.iter().zip([1_000, 1_001]) {
+        assert_eq!(entry["session_id"], session_id);
+        assert_eq!(entry["process_id"], session_id);
+        assert_eq!(entry["state"], "running");
+        assert_eq!(entry["exit_code"], Value::Null);
+        assert_eq!(entry["required_follow_up"]["operation"], "write_stdin");
+        assert_eq!(
+            entry["required_follow_up"]["arguments"],
+            serde_json::json!({ "session_id": session_id, "chars": "" })
+        );
+        assert!(entry["chunk_id"].as_str().is_some_and(|id| !id.is_empty()));
+    }
+    assert_eq!(running_reduction["actionable_state"]["version"], 1);
+    assert!(output_text(&completed_reduction["content_items"]).contains("session-one-done"));
+    assert!(output_text(&completed_reduction["content_items"]).contains("session-two-done"));
+    let completed_entries = completed_reduction["actionable_state"]["entries"]
+        .as_array()
+        .expect("completed actionable entries");
+    assert_eq!(completed_entries.len(), 2);
+    for (entry, session_id) in completed_entries.iter().zip([1_000, 1_001]) {
+        assert_eq!(entry["session_id"], session_id);
+        assert_eq!(entry["process_id"], session_id);
+        assert_eq!(entry["state"], "completed");
+        assert_eq!(entry["exit_code"], 0);
+        assert_eq!(entry["required_follow_up"], Value::Null);
+        assert!(entry["chunk_id"].as_str().is_some_and(|id| !id.is_empty()));
+    }
+
+    let final_request = response_mock.last_request().expect("final model request");
+    let body = final_request.body_json();
+    let running_output = model_visible_tool_output_for_call(&body, "call-1");
+    let completed_output = model_visible_tool_output_for_call(&body, "call-2");
+    assert!(running_output.contains("selected actionable-state reducer replacement 1"));
+    assert!(running_output.contains("<codex_actionable_state>"));
+    assert!(running_output.contains(r#""session_id":1000"#));
+    assert!(running_output.contains(r#""session_id":1001"#));
+    assert!(completed_output.contains("selected actionable-state reducer replacement 2"));
+    assert!(completed_output.contains(r#""state":"completed""#));
+    assert!(completed_output.contains(r#""exit_code":0"#));
 
     Ok(())
 }
