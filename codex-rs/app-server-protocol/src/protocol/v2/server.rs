@@ -24,6 +24,7 @@ pub struct CodeModeOutputReducerCapability {
     pub intent_context_version: u32,
     pub reducer_request_field: String,
     pub post_tool_use_field: String,
+    pub actionable_state: CodeModeActionableStateCapability,
     pub config_key: String,
     pub max_output_tokens_ceiling_config_key: String,
     pub post_tool_use_nested_context_field: String,
@@ -31,6 +32,16 @@ pub struct CodeModeOutputReducerCapability {
     pub supports_thread_resume_overrides: bool,
     pub dynamic_tools_resume_field: String,
     pub acceptance: CodeModeOutputReducerAcceptanceCapability,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodeModeActionableStateCapability {
+    pub version: u32,
+    pub reducer_request_field: String,
+    pub reducer_response_field: String,
+    pub model_output_tag: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

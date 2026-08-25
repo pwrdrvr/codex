@@ -7,6 +7,7 @@ use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CodeModeActionableStateCapability;
 use codex_app_server_protocol::CodeModeOutputReducerAcceptanceCapability;
 use codex_app_server_protocol::CodeModeOutputReducerCapability;
 use codex_app_server_protocol::CodeModePostToolUseGroupingCapability;
@@ -51,6 +52,12 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
                 intent_context_version: 1,
                 reducer_request_field: "parent_intent".to_string(),
                 post_tool_use_field: "parent_intent".to_string(),
+                actionable_state: CodeModeActionableStateCapability {
+                    version: 1,
+                    reducer_request_field: "actionable_state".to_string(),
+                    reducer_response_field: "actionable_state".to_string(),
+                    model_output_tag: "codex_actionable_state".to_string(),
+                },
                 config_key: "features.code_mode.output_reducer".to_string(),
                 max_output_tokens_ceiling_config_key:
                     "features.code_mode.max_output_tokens_ceiling".to_string(),

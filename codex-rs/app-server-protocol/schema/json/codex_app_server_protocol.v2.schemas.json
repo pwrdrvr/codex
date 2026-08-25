@@ -3715,6 +3715,31 @@
       ],
       "title": "ClientRequest"
     },
+    "CodeModeActionableStateCapability": {
+      "properties": {
+        "modelOutputTag": {
+          "type": "string"
+        },
+        "reducerRequestField": {
+          "type": "string"
+        },
+        "reducerResponseField": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "modelOutputTag",
+        "reducerRequestField",
+        "reducerResponseField",
+        "version"
+      ],
+      "type": "object"
+    },
     "CodeModeOutputReducerAcceptanceCapability": {
       "properties": {
         "callbackVersion": {
@@ -3744,6 +3769,9 @@
       "properties": {
         "acceptance": {
           "$ref": "#/definitions/CodeModeOutputReducerAcceptanceCapability"
+        },
+        "actionableState": {
+          "$ref": "#/definitions/CodeModeActionableStateCapability"
         },
         "configKey": {
           "type": "string"
@@ -3787,6 +3815,7 @@
       },
       "required": [
         "acceptance",
+        "actionableState",
         "configKey",
         "continuationGuidanceVersion",
         "dynamicToolsResumeField",

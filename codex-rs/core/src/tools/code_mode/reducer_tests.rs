@@ -33,6 +33,11 @@ use super::UNTRUSTED_REPLACEMENT_HEADER;
 use super::apply_output_reduction;
 use super::clamp_max_output_tokens;
 use crate::config::CodeModeOutputReducerConfig;
+use crate::tools::code_mode::actionable_state::ActionableState;
+use crate::tools::code_mode::actionable_state::ActionableStateEntry;
+use crate::tools::code_mode::actionable_state::ActionableStateStatus;
+use crate::tools::code_mode::actionable_state::RequiredFollowUp;
+use crate::tools::code_mode::actionable_state::WriteStdinFollowUpArguments;
 use crate::tools::code_mode::truncate_code_mode_result;
 
 const REDUCE_PATH: &str = "/v1/reduce-code-mode-output";
@@ -58,8 +63,27 @@ fn context() -> ReductionContext {
         cell_id: "cell-1".to_string(),
         script: Some("await tools.exec_command({ cmd: 'rg --files' })".to_string()),
         parent_intent: Some("List the repository files for review.".to_string()),
+        actionable_state: None,
         script_status: "Script completed".to_string(),
     }
+}
+
+fn running_actionable_state() -> ActionableState {
+    ActionableState::new(vec![ActionableStateEntry {
+        session_id: 1_000,
+        process_id: 1_000,
+        chunk_id: "abc123".to_string(),
+        state: ActionableStateStatus::Running,
+        exit_code: None,
+        required_follow_up: Some(RequiredFollowUp {
+            operation: "write_stdin".to_string(),
+            arguments: WriteStdinFollowUpArguments {
+                session_id: 1_000,
+                chars: String::new(),
+            },
+        }),
+    }])
+    .expect("one actionable entry")
 }
 
 struct Harness {
@@ -119,6 +143,21 @@ impl Harness {
         apply_output_reduction(
             Some(&self.reducer),
             &context(),
+            items,
+            /*max_output_tokens*/ None,
+            /*ceiling*/ None,
+        )
+        .await
+    }
+
+    async fn reduce_with_context(
+        &self,
+        context: &ReductionContext,
+        items: Vec<FunctionCallOutputContentItem>,
+    ) -> Vec<FunctionCallOutputContentItem> {
+        apply_output_reduction(
+            Some(&self.reducer),
+            context,
             items,
             /*max_output_tokens*/ None,
             /*ceiling*/ None,
@@ -478,6 +517,139 @@ async fn v2_reduction_request_omits_absent_parent_intent() {
         .expect("recorded requests");
     let body: JsonValue = serde_json::from_slice(&requests[0].body).expect("parse request body");
     assert_eq!(body.get("parent_intent"), None);
+}
+
+#[tokio::test]
+async fn v2_reducer_must_echo_actionable_state_before_its_replacement_is_selected() {
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    let actionable_state = running_actionable_state();
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "actionable-gate",
+            "actionable_state": actionable_state,
+            "replacement": [{ "type": "input_text", "text": "stdout summary" }]
+        })))
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&harness.server)
+        .await;
+    let mut reduction_context = context();
+    reduction_context.actionable_state = Some(actionable_state.clone());
+
+    let reduced = harness
+        .reduce_with_context(&reduction_context, large_original())
+        .await;
+
+    assert_eq!(
+        reduced,
+        vec![
+            text(UNTRUSTED_REPLACEMENT_HEADER),
+            text("stdout summary"),
+            text(UNTRUSTED_REPLACEMENT_FOOTER),
+            text(OUTPUT_REDUCTION_CONTINUATION_GUIDANCE),
+            actionable_state.output_item(),
+        ]
+    );
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    let reduction: JsonValue = serde_json::from_slice(&requests[0].body).expect("request JSON");
+    assert_eq!(reduction["actionable_state"], json!(actionable_state));
+}
+
+#[tokio::test]
+async fn v2_reducer_that_loses_actionable_state_fails_open_without_acceptance() {
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "lost-actionable-gate",
+            "replacement": [{ "type": "input_text", "text": "unsafe summary" }]
+        })))
+        .mount(&harness.server)
+        .await;
+    let actionable_state = running_actionable_state();
+    let mut reduction_context = context();
+    reduction_context.actionable_state = Some(actionable_state.clone());
+    let original = large_original();
+
+    let reduced = harness
+        .reduce_with_context(&reduction_context, original.clone())
+        .await;
+
+    let mut expected = truncate_code_mode_result(original, None);
+    expected.push(actionable_state.output_item());
+    assert_eq!(reduced, expected);
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    assert_eq!(
+        requests.len(),
+        1,
+        "a rejected replacement is never accepted"
+    );
+}
+
+#[tokio::test]
+async fn v2_reducer_that_conflicts_with_actionable_state_fails_open() {
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    let actionable_state = running_actionable_state();
+    let mut conflicting_state = json!(actionable_state);
+    conflicting_state["entries"][0]["process_id"] = json!(9_999);
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "conflicting-actionable-gate",
+            "actionable_state": conflicting_state,
+            "replacement": [{ "type": "input_text", "text": "unsafe summary" }]
+        })))
+        .mount(&harness.server)
+        .await;
+    let mut reduction_context = context();
+    reduction_context.actionable_state = Some(actionable_state.clone());
+    let original = large_original();
+
+    let reduced = harness
+        .reduce_with_context(&reduction_context, original.clone())
+        .await;
+
+    let mut expected = truncate_code_mode_result(original, None);
+    expected.push(actionable_state.output_item());
+    assert_eq!(reduced, expected);
+}
+
+#[tokio::test]
+async fn v1_reducer_with_actionable_state_fails_open_without_changing_its_request_contract() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    let actionable_state = running_actionable_state();
+    let mut reduction_context = context();
+    reduction_context.actionable_state = Some(actionable_state.clone());
+    let original = large_original();
+
+    let reduced = harness
+        .reduce_with_context(&reduction_context, original.clone())
+        .await;
+
+    let mut expected = truncate_code_mode_result(original, None);
+    expected.push(actionable_state.output_item());
+    assert_eq!(reduced, expected);
+    assert!(
+        harness
+            .server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty(),
+        "Codex must not send a v2-only field to a legacy reducer"
+    );
 }
 
 /// A cell whose script is no longer known omits the field rather than sending
