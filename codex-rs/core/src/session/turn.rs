@@ -2333,8 +2333,10 @@ async fn try_run_sampling_request(
                     )
                     .await
                 {
-                    if completed_assistant_message {
-                        latest_parent_intent = completed_parent_intent;
+                    if completed_assistant_message
+                        && let Some(completed_parent_intent) = completed_parent_intent
+                    {
+                        latest_parent_intent = Some(completed_parent_intent);
                     }
                     continue;
                 }
@@ -2384,8 +2386,10 @@ async fn try_run_sampling_request(
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
                 }
-                if completed_assistant_message {
-                    latest_parent_intent = completed_parent_intent;
+                if completed_assistant_message
+                    && let Some(completed_parent_intent) = completed_parent_intent
+                {
+                    latest_parent_intent = Some(completed_parent_intent);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
                 // todo: remove before stabilizing multi-agent v2

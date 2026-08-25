@@ -25,6 +25,8 @@
 //!   original, so a reducer cannot enlarge what reaches the model.
 //! - **Replacement is untrusted.** See [`UNTRUSTED_REPLACEMENT_HEADER`].
 
+use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -36,6 +38,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::CodeModeOutputReducerConfig;
+use crate::context::CodeModeOutputReductionGuidance;
+use crate::context::ContextualUserFragment;
 use crate::tools::code_mode::actionable_state::ActionableState;
 use crate::unified_exec::resolve_max_tokens;
 
@@ -43,6 +47,7 @@ use crate::unified_exec::resolve_max_tokens;
 const REDUCER_PROTOCOL_VERSION: u32 = 1;
 const ACCEPTANCE_MAX_ATTEMPTS: u32 = 2;
 const ACCEPTANCE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 10_000;
 
 /// Prepended to every replacement before it enters the parent model's context.
 ///
@@ -67,14 +72,6 @@ pub(super) const UNTRUSTED_REPLACEMENT_FOOTER: &str = "</untrusted_reduced_outpu
 /// Keeping this outside the untrusted-data fence makes the reduction semantics actionable at the
 /// decision point where the parent model chooses its next cell. The guidance is Codex-owned and
 /// bounded independently of the host replacement budget, like the script-status header.
-pub(super) const OUTPUT_REDUCTION_CONTINUATION_GUIDANCE: &str = concat!(
-    "Codex guidance: output reduction occurs only after the cell completes and does not change ",
-    "nested tool results inside JavaScript. Keep broad, independent Code Mode operations batched ",
-    "with `Promise.all`, inspect or transform their results in the cell, and emit one compact ",
-    "combined result. Use reduced summaries to triage; retrieve only the selected results that ",
-    "need deeper inspection, preferably together in a later batch."
-);
-
 /// Contextual identifiers a reducer needs to file and later serve the preserved output.
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ReductionContext {
@@ -133,16 +130,13 @@ pub(super) trait CodeModeOutputReducer: Send + Sync {
 ///
 /// `exec` and `wait` take `max_output_tokens` / `max_tokens` straight from the model, so without a
 /// ceiling a model can request a budget large enough to make any reduction pointless. Returns the
-/// caller's value unchanged when no ceiling is set, which keeps the default path byte-identical.
+/// caller's resolved value after applying the unconditional model-context item cap.
 pub(super) fn clamp_max_output_tokens(
     requested: Option<usize>,
     ceiling: Option<usize>,
 ) -> Option<usize> {
-    let Some(ceiling) = ceiling else {
-        return requested;
-    };
-    // A ceiling has to bind the default too, or omitting the argument would evade it.
-    Some(resolve_max_tokens(requested).min(ceiling))
+    let bounded = resolve_max_tokens(requested).min(MAX_MODEL_CONTEXT_ITEM_TOKENS);
+    Some(ceiling.map_or(bounded, |ceiling| bounded.min(ceiling)))
 }
 
 /// The reduction seam. Called for every `RuntimeResponse` arm by `handle_runtime_response`.
@@ -154,11 +148,23 @@ pub(super) async fn apply_output_reduction(
     ceiling: Option<usize>,
 ) -> Vec<FunctionCallOutputContentItem> {
     let max_output_tokens = clamp_max_output_tokens(max_output_tokens, ceiling);
+    let actionable_output_items = match context.actionable_state.as_ref() {
+        Some(actionable_state) => {
+            let Some(output_items) = actionable_state.output_items() else {
+                tracing::warn!(
+                    "Codex-owned actionable state was not renderable; rejecting reduction"
+                );
+                return super::truncate_code_mode_result(items, max_output_tokens);
+            };
+            output_items
+        }
+        None => Vec::new(),
+    };
     let Some(reducer) = reducer else {
         return truncate_and_append_actionable_state(
             items,
             max_output_tokens,
-            context.actionable_state.as_ref(),
+            actionable_output_items,
         );
     };
     let budget = resolve_max_tokens(max_output_tokens);
@@ -167,30 +173,26 @@ pub(super) async fn apply_output_reduction(
         return truncate_and_append_actionable_state(
             items,
             max_output_tokens,
-            context.actionable_state.as_ref(),
+            actionable_output_items,
         );
     };
     // Truncate the replacement under the same policy: the budget is the host's, not the reducer's.
     let mut reduced =
         super::truncate_code_mode_result(fence_replacement(replacement), max_output_tokens);
     reduced.push(FunctionCallOutputContentItem::InputText {
-        text: OUTPUT_REDUCTION_CONTINUATION_GUIDANCE.to_string(),
+        text: CodeModeOutputReductionGuidance.render(),
     });
-    if let Some(actionable_state) = &context.actionable_state {
-        reduced.push(actionable_state.output_item());
-    }
+    reduced.extend(actionable_output_items);
     reduced
 }
 
 fn truncate_and_append_actionable_state(
     items: Vec<FunctionCallOutputContentItem>,
     max_output_tokens: Option<usize>,
-    actionable_state: Option<&ActionableState>,
+    actionable_output_items: Vec<FunctionCallOutputContentItem>,
 ) -> Vec<FunctionCallOutputContentItem> {
     let mut output = super::truncate_code_mode_result(items, max_output_tokens);
-    if let Some(actionable_state) = actionable_state {
-        output.push(actionable_state.output_item());
-    }
+    output.extend(actionable_output_items);
     output
 }
 
@@ -375,16 +377,26 @@ impl HttpCodeModeOutputReducer {
             max_output_tokens,
             content_items: items,
         };
+        let request_body = serialize_json_bounded(&request, self.config.max_request_bytes)
+            .inspect_err(|error| {
+                tracing::debug!(
+                    %error,
+                    limit = self.config.max_request_bytes,
+                    "code-mode output reducer skipped: serialized request above max_request_bytes"
+                );
+            })
+            .ok()?;
 
         // One budget for reduction plus the acceptance callback. Splitting it per
         // stage would let a slow reducer spend the timeout more than once.
         let deadline = tokio::time::Instant::now() + self.config.timeout;
         let body = tokio::time::timeout_at(deadline, async {
-            let response = self
+            let mut response = self
                 .client
                 .post(&descriptor.url)
                 .bearer_auth(&descriptor.token)
-                .json(&request)
+                .header("content-type", "application/json")
+                .body(request_body)
                 .send()
                 .await
                 .inspect_err(|error| {
@@ -406,13 +418,37 @@ impl HttpCodeModeOutputReducer {
                 return None;
             }
 
-            response
-                .bytes()
-                .await
-                .inspect_err(|error| {
-                    tracing::warn!(%error, "code-mode output reducer response could not be read");
-                })
-                .ok()
+            let mut body = Vec::with_capacity(
+                response
+                    .content_length()
+                    .and_then(|length| usize::try_from(length).ok())
+                    .unwrap_or_default()
+                    .min(self.config.max_response_bytes),
+            );
+            loop {
+                let chunk = response
+                    .chunk()
+                    .await
+                    .inspect_err(|error| {
+                        tracing::warn!(
+                            %error,
+                            "code-mode output reducer response could not be read"
+                        );
+                    })
+                    .ok()?;
+                let Some(chunk) = chunk else {
+                    return Some(body);
+                };
+                if chunk.len() > self.config.max_response_bytes.saturating_sub(body.len()) {
+                    tracing::warn!(
+                        body_bytes = body.len().saturating_add(chunk.len()),
+                        limit = self.config.max_response_bytes,
+                        "code-mode output reducer response exceeded max_response_bytes"
+                    );
+                    return None;
+                }
+                body.extend_from_slice(&chunk);
+            }
         })
         .await
         .unwrap_or_else(|_elapsed| {
@@ -423,15 +459,6 @@ impl HttpCodeModeOutputReducer {
             None
         })?;
 
-        if body.len() > self.config.max_response_bytes {
-            tracing::warn!(
-                body_bytes = body.len(),
-                limit = self.config.max_response_bytes,
-                "code-mode output reducer response exceeded max_response_bytes"
-            );
-            return None;
-        }
-
         let parsed = serde_json::from_slice::<ReductionResponse>(&body)
             .inspect_err(|error| {
                 tracing::warn!(%error, "code-mode output reducer returned a malformed response");
@@ -441,6 +468,13 @@ impl HttpCodeModeOutputReducer {
         // An empty replacement would hand the model a bare fence with nothing in it.
         if replacement.is_empty() {
             tracing::warn!("code-mode output reducer returned an empty replacement");
+            return None;
+        }
+        if !replacement
+            .iter()
+            .all(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
+        {
+            tracing::warn!("code-mode output reducer returned a non-text replacement");
             return None;
         }
         let expected_actionable_state = context
@@ -567,6 +601,37 @@ fn estimate_payload_bytes(items: &[FunctionCallOutputContentItem]) -> usize {
             }
         })
         .sum()
+}
+
+fn serialize_json_bounded<T: Serialize>(value: &T, limit: usize) -> io::Result<Vec<u8>> {
+    let mut writer = BoundedWriter {
+        bytes: Vec::with_capacity(limit.min(64 * 1024)),
+        limit,
+    };
+    serde_json::to_writer(&mut writer, value).map_err(io::Error::other)?;
+    Ok(writer.bytes)
+}
+
+struct BoundedWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl Write for BoundedWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if buffer.len() > self.limit.saturating_sub(self.bytes.len()) {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "serialized reducer request exceeded max_request_bytes",
+            ));
+        }
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

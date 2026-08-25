@@ -8,12 +8,16 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_protocol::models::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -25,7 +29,6 @@ use wiremock::matchers::path;
 
 use super::CodeModeOutputReducer;
 use super::HttpCodeModeOutputReducer;
-use super::OUTPUT_REDUCTION_CONTINUATION_GUIDANCE;
 use super::PostToolUseAcceptanceContext;
 use super::ReductionContext;
 use super::UNTRUSTED_REPLACEMENT_FOOTER;
@@ -33,6 +36,7 @@ use super::UNTRUSTED_REPLACEMENT_HEADER;
 use super::apply_output_reduction;
 use super::clamp_max_output_tokens;
 use crate::config::CodeModeOutputReducerConfig;
+use crate::context::CODE_MODE_OUTPUT_REDUCTION_GUIDANCE as OUTPUT_REDUCTION_CONTINUATION_GUIDANCE;
 use crate::tools::code_mode::actionable_state::ActionableState;
 use crate::tools::code_mode::actionable_state::ActionableStateEntry;
 use crate::tools::code_mode::actionable_state::ActionableStateStatus;
@@ -95,6 +99,19 @@ struct Harness {
 
 impl Harness {
     async fn start(timeout: Duration) -> Self {
+        Self::start_with_limits(
+            timeout,
+            /*max_request_bytes*/ 1024 * 1024,
+            /*max_response_bytes*/ 64 * 1024,
+        )
+        .await
+    }
+
+    async fn start_with_limits(
+        timeout: Duration,
+        max_request_bytes: usize,
+        max_response_bytes: usize,
+    ) -> Self {
         let server = MockServer::start().await;
         let descriptor_dir = TempDir::new().expect("create descriptor dir");
         let descriptor_path = descriptor_dir.path().join("bridge.json");
@@ -113,8 +130,8 @@ impl Harness {
         let reducer = HttpCodeModeOutputReducer::new(CodeModeOutputReducerConfig {
             descriptor_path,
             min_trigger_bytes: 512,
-            max_request_bytes: 1024 * 1024,
-            max_response_bytes: 64 * 1024,
+            max_request_bytes,
+            max_response_bytes,
             timeout,
             connect_timeout: Duration::from_millis(500),
         })
@@ -542,7 +559,10 @@ async fn reducer_must_echo_actionable_state_before_its_replacement_is_selected()
             text("stdout summary"),
             text(UNTRUSTED_REPLACEMENT_FOOTER),
             text(OUTPUT_REDUCTION_CONTINUATION_GUIDANCE),
-            actionable_state.output_item(),
+            actionable_state
+                .output_items()
+                .expect("test actionable state should render")[0]
+                .clone(),
         ]
     );
     let requests = harness
@@ -575,7 +595,11 @@ async fn reducer_that_loses_actionable_state_fails_open_without_acceptance() {
         .await;
 
     let mut expected = truncate_code_mode_result(original, None);
-    expected.push(actionable_state.output_item());
+    expected.extend(
+        actionable_state
+            .output_items()
+            .expect("test actionable state should render"),
+    );
     assert_eq!(reduced, expected);
     let requests = harness
         .server
@@ -613,7 +637,11 @@ async fn reducer_that_conflicts_with_actionable_state_fails_open() {
         .await;
 
     let mut expected = truncate_code_mode_result(original, None);
-    expected.push(actionable_state.output_item());
+    expected.extend(
+        actionable_state
+            .output_items()
+            .expect("test actionable state should render"),
+    );
     assert_eq!(reduced, expected);
 }
 
@@ -709,6 +737,154 @@ async fn reducer_response_with_invalid_content_items_falls_back_to_truncation() 
     assert_eq!(reduced, truncate_code_mode_result(original, None));
 }
 
+#[tokio::test]
+async fn reducer_media_replacement_fails_open_without_acceptance() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "media-gate",
+            "replacement": [{
+                "type": "input_image",
+                "image_url": format!("data:image/png;base64,{}", "A".repeat(4_096)),
+                "detail": "original"
+            }]
+        })))
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&harness.server)
+        .await;
+    let original = large_original();
+
+    let reduced = harness.reduce(original.clone()).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    assert_eq!(requests.len(), 1, "rejected media is never accepted");
+}
+
+#[tokio::test]
+async fn serialized_request_size_includes_reduction_context() {
+    let harness = Harness::start_with_limits(
+        Duration::from_secs(5),
+        /*max_request_bytes*/ 1_024,
+        /*max_response_bytes*/ 64 * 1024,
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": null
+        })))
+        .mount(&harness.server)
+        .await;
+    let mut oversized_context = context();
+    oversized_context.script = Some("\\\"".repeat(800));
+    let original = vec![text(&"x".repeat(600))];
+
+    let reduced = apply_output_reduction(
+        Some(&harness.reducer),
+        &oversized_context,
+        original.clone(),
+        /*max_output_tokens*/ None,
+        /*ceiling*/ None,
+    )
+    .await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert!(
+        harness
+            .server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty(),
+        "the serialized request, not only content strings, must obey max_request_bytes"
+    );
+}
+
+#[tokio::test]
+async fn chunked_response_stops_reading_at_the_configured_limit() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind chunked reducer");
+    let address = listener.local_addr().expect("chunked reducer address");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept reducer request");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1_024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream
+                .read(&mut buffer)
+                .await
+                .expect("read reducer request");
+            if read == 0 {
+                return;
+            }
+            request.extend_from_slice(&buffer[..read]);
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .expect("write chunked headers");
+        let oversized_chunk = vec![b'x'; 65];
+        stream
+            .write_all(format!("{:x}\r\n", oversized_chunk.len()).as_bytes())
+            .await
+            .expect("write chunk size");
+        stream
+            .write_all(&oversized_chunk)
+            .await
+            .expect("write oversized chunk");
+        stream.write_all(b"\r\n").await.expect("finish chunk");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    });
+    let descriptor_dir = TempDir::new().expect("create descriptor dir");
+    let descriptor_path = descriptor_dir.path().join("bridge.json");
+    std::fs::write(
+        &descriptor_path,
+        json!({
+            "version": 1,
+            "url": format!("http://{address}{REDUCE_PATH}"),
+            "token": TOKEN,
+            "acceptance_url": format!("http://{address}{ACCEPT_PATH}"),
+        })
+        .to_string(),
+    )
+    .expect("write descriptor");
+    let reducer = HttpCodeModeOutputReducer::new(CodeModeOutputReducerConfig {
+        descriptor_path,
+        min_trigger_bytes: 0,
+        max_request_bytes: 1024 * 1024,
+        max_response_bytes: 64,
+        timeout: Duration::from_secs(2),
+        connect_timeout: Duration::from_millis(500),
+    })
+    .expect("build reducer");
+    let reducer: Arc<dyn CodeModeOutputReducer> = Arc::new(reducer);
+    let original = large_original();
+    let started_at = Instant::now();
+
+    let reduced =
+        apply_output_reduction(Some(&reducer), &context(), original.clone(), None, None).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert!(
+        started_at.elapsed() < Duration::from_secs(1),
+        "the client buffered an unterminated oversized body until timeout"
+    );
+    server.abort();
+}
+
 /// An error status is a fallback, not a failure.
 #[tokio::test]
 async fn reducer_error_status_falls_back_to_truncation() {
@@ -794,9 +970,9 @@ async fn missing_descriptor_falls_back_to_truncation() {
 
 #[test]
 fn ceiling_clamps_the_model_supplied_budget() {
-    // No ceiling leaves the model's request, and the default, untouched.
-    assert_eq!(clamp_max_output_tokens(Some(200_000), None), Some(200_000));
-    assert_eq!(clamp_max_output_tokens(None, None), None);
+    // The unconditional model-context cap binds even without a host ceiling.
+    assert_eq!(clamp_max_output_tokens(Some(200_000), None), Some(10_000));
+    assert_eq!(clamp_max_output_tokens(None, None), Some(10_000));
     // A ceiling binds an oversized request down.
     assert_eq!(
         clamp_max_output_tokens(Some(200_000), Some(4_000)),

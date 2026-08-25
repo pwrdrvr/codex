@@ -12,14 +12,13 @@ use std::sync::Mutex;
 use codex_code_mode::CellId;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_tools::ToolName;
-use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
+use crate::context::CodeModeActionableStateFragment;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 
 pub(super) const ACTIONABLE_STATE_VERSION: u32 = 1;
-pub(super) const ACTIONABLE_STATE_OUTPUT_TAG: &str = "codex_actionable_state";
 
 const EXEC_COMMAND_TOOL_NAME: &str = "exec_command";
 const WRITE_STDIN_TOOL_NAME: &str = "write_stdin";
@@ -65,7 +64,7 @@ impl ActionableStateStore {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct ActionableState {
     pub version: u32,
     pub entries: Vec<ActionableStateEntry>,
@@ -98,11 +97,31 @@ impl ActionableState {
         })
     }
 
-    pub(super) fn output_item(&self) -> FunctionCallOutputContentItem {
-        let json = self.to_json_value().to_string();
-        FunctionCallOutputContentItem::InputText {
-            text: format!("<{ACTIONABLE_STATE_OUTPUT_TAG}>{json}</{ACTIONABLE_STATE_OUTPUT_TAG}>"),
-        }
+    pub(super) fn output_items(&self) -> Option<Vec<FunctionCallOutputContentItem>> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                let fragment = match entry.state {
+                    ActionableStateStatus::Running => CodeModeActionableStateFragment::running(
+                        self.version,
+                        entry.session_id,
+                        entry.process_id,
+                        &entry.chunk_id,
+                    ),
+                    ActionableStateStatus::Completed => {
+                        let exit_code = entry.exit_code?;
+                        CodeModeActionableStateFragment::completed(
+                            self.version,
+                            entry.session_id,
+                            entry.process_id,
+                            &entry.chunk_id,
+                            exit_code,
+                        )
+                    }
+                }?;
+                Some(fragment.into_output_item())
+            })
+            .collect()
     }
 
     pub(super) fn to_json_value(&self) -> JsonValue {
@@ -113,7 +132,7 @@ impl ActionableState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct ActionableStateEntry {
     pub session_id: i32,
     pub process_id: i32,
@@ -123,20 +142,20 @@ pub(super) struct ActionableStateEntry {
     pub required_follow_up: Option<RequiredFollowUp>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ActionableStateStatus {
     Running,
     Completed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RequiredFollowUp {
     pub operation: String,
     pub arguments: WriteStdinFollowUpArguments,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct WriteStdinFollowUpArguments {
     pub session_id: i32,
     pub chars: String,
@@ -152,7 +171,7 @@ pub(super) fn from_nested_tool_result(
     }
     let fields = result.as_object()?;
     let chunk_id = fields.get("chunk_id")?.as_str()?.to_string();
-    if chunk_id.is_empty() {
+    if chunk_id.len() != 6 || !chunk_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     let result_session_id = fields

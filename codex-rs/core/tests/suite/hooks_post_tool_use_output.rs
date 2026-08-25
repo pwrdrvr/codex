@@ -29,16 +29,16 @@ enum ShellTool {
 }
 
 #[tokio::test]
-async fn shell_command_post_tool_use_receives_output_before_model_truncation() -> Result<()> {
-    assert_post_tool_use_receives_output_before_model_truncation(ShellTool::ShellCommand).await
+async fn shell_command_post_tool_use_receives_legacy_truncated_output() -> Result<()> {
+    assert_post_tool_use_receives_legacy_truncated_output(ShellTool::ShellCommand).await
 }
 
 #[tokio::test]
-async fn unified_exec_post_tool_use_receives_output_before_model_truncation() -> Result<()> {
-    assert_post_tool_use_receives_output_before_model_truncation(ShellTool::UnifiedExec).await
+async fn unified_exec_post_tool_use_receives_legacy_truncated_output() -> Result<()> {
+    assert_post_tool_use_receives_legacy_truncated_output(ShellTool::UnifiedExec).await
 }
 
-async fn assert_post_tool_use_receives_output_before_model_truncation(
+async fn assert_post_tool_use_receives_legacy_truncated_output(
     shell_tool: ShellTool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -107,10 +107,15 @@ async fn assert_post_tool_use_receives_output_before_model_truncation(
     let tool_response = hook_payload["tool_response"]
         .as_str()
         .context("PostToolUse tool_response should be a string")?;
-    assert!(tool_response.starts_with(OUTPUT_START));
-    assert!(tool_response.trim_end().ends_with(OUTPUT_END));
-    assert!(!tool_response.contains("tokens truncated"));
-    assert!(tool_response.len() > 60_000);
+    assert!(tool_response.contains(OUTPUT_START));
+    assert!(tool_response.contains(OUTPUT_END));
+    assert!(tool_response.contains("tokens truncated"));
+    assert!(tool_response.len() < 60_000);
+    assert_eq!(
+        hook_payload.get("token_miser_exact_tool_response"),
+        None,
+        "exact output is negotiated only when a reducer is configured"
+    );
 
     Ok(())
 }

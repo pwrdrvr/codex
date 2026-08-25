@@ -1,3 +1,5 @@
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_utils_output_truncation::approx_token_count;
 use pretty_assertions::assert_eq;
 
 use super::ActionableState;
@@ -40,5 +42,25 @@ fn actionable_state_is_bounded_without_discarding_a_running_handle() {
             .entries
             .iter()
             .any(|entry| entry.process_id == running_process_id)
+    );
+    let Some(output_items) = state.output_items() else {
+        panic!("bounded actionable state should render");
+    };
+    assert_eq!(output_items.len(), MAX_UNIFIED_EXEC_PROCESSES);
+    let mut total_tokens = 0;
+    for output_item in output_items {
+        let FunctionCallOutputContentItem::InputText { text } = output_item else {
+            panic!("actionable state should render as text");
+        };
+        let item_tokens = approx_token_count(&text);
+        total_tokens += item_tokens;
+        assert!(
+            item_tokens <= 1_000,
+            "one actionable-state context item crossed the 1K-token review threshold"
+        );
+    }
+    assert!(
+        total_tokens <= 10_000,
+        "aggregate actionable state is capped"
     );
 }

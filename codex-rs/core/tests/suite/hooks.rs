@@ -4037,6 +4037,10 @@ try {{
                     &[hidden_reasoning],
                     &[hidden_reasoning],
                 ),
+                ev_assistant_message(
+                    "msg-hidden-parent-intent",
+                    "<oai-mem-citation>hidden assistant markup</oai-mem-citation>",
+                ),
                 ev_custom_tool_call(&call_id, "exec", &code),
                 ev_completed("resp-1"),
             ]),
@@ -4909,6 +4913,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
                     &[hidden_reasoning],
                     &[hidden_reasoning],
                 ),
+                ev_assistant_message("msg-empty-parent-intent", ""),
                 core_test_support::responses::ev_function_call(
                     call_id,
                     "shell_command",
