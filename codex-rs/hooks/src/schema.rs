@@ -346,6 +346,10 @@ pub(crate) struct PostToolUseCommandInput {
     /// PwrAgent fork contract: runtime-local member key within `code_mode_cell_id`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_mode_tool_call_id: Option<String>,
+    /// PwrAgent fork contract: bounded visible narration preceding the direct
+    /// tool call or outer Code Mode call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_intent: Option<String>,
     /// PwrAgent fork contract: direct replacement selection acknowledgements are supported.
     pub token_miser_acceptance_version: u32,
     /// PwrAgent fork contract: nested PostToolUse grouping fields are supported.

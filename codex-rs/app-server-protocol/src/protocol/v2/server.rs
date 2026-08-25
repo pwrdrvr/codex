@@ -21,6 +21,9 @@ pub struct ServerCapabilitiesReadResponse {
 pub struct CodeModeOutputReducerCapability {
     pub protocol_version: u32,
     pub continuation_guidance_version: u32,
+    pub intent_context_version: u32,
+    pub reducer_request_field: String,
+    pub post_tool_use_field: String,
     pub config_key: String,
     pub max_output_tokens_ceiling_config_key: String,
     pub post_tool_use_nested_context_field: String,

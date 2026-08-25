@@ -3756,7 +3756,15 @@
         "dynamicToolsResumeField": {
           "type": "string"
         },
+        "intentContextVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "maxOutputTokensCeilingConfigKey": {
+          "type": "string"
+        },
+        "postToolUseField": {
           "type": "string"
         },
         "postToolUseGrouping": {
@@ -3770,6 +3778,9 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "reducerRequestField": {
+          "type": "string"
+        },
         "supportsThreadResumeOverrides": {
           "type": "boolean"
         }
@@ -3779,10 +3790,13 @@
         "configKey",
         "continuationGuidanceVersion",
         "dynamicToolsResumeField",
+        "intentContextVersion",
         "maxOutputTokensCeilingConfigKey",
+        "postToolUseField",
         "postToolUseGrouping",
         "postToolUseNestedContextField",
         "protocolVersion",
+        "reducerRequestField",
         "supportsThreadResumeOverrides"
       ],
       "type": "object"

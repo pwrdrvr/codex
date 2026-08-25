@@ -665,6 +665,11 @@ impl ToolRegistry {
             Err(_) => false,
         };
         let is_code_mode_nested = matches!(invocation.source, ToolCallSource::CodeMode { .. });
+        let parent_intent = invocation
+            .session
+            .services
+            .code_mode_service
+            .take_parent_intent(&invocation.call_id, &invocation.source);
         emit_metric_for_tool_read(&invocation, success);
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
@@ -681,6 +686,7 @@ impl ToolRegistry {
                     &invocation.turn,
                     post_tool_use_payload,
                     &invocation.source,
+                    parent_intent,
                 )
                 .await,
             )

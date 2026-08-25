@@ -205,6 +205,7 @@ pub(crate) struct HandleOutputCtx {
     pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
     pub cancellation_token: CancellationToken,
+    pub parent_intent: Option<Arc<str>>,
 }
 
 pub(crate) async fn apply_turn_item_contributors(
@@ -314,6 +315,11 @@ pub(crate) async fn handle_output_item_done(
 
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
+
+            ctx.sess
+                .services
+                .code_mode_service
+                .record_direct_parent_intent(&call.call_id, ctx.parent_intent.clone());
 
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_future: InFlightFuture<'static> = Box::pin(

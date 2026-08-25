@@ -88,6 +88,12 @@ pub(crate) struct CodeModeService {
     /// start, so the source has to outlive the `exec` call that carried it.
     /// Only populated when a reducer is configured.
     cell_scripts: Mutex<HashMap<CellId, Arc<str>>>,
+    /// Bounded visible narration keyed by a direct model tool call until the
+    /// call starts or reaches PostToolUse.
+    direct_parent_intents: Mutex<HashMap<String, Arc<str>>>,
+    /// The outer `exec` narration inherited by reducer requests and nested
+    /// PostToolUse calls for the lifetime of a Code Mode cell.
+    cell_parent_intents: Mutex<HashMap<CellId, Arc<str>>>,
     shutting_down: AtomicBool,
     unavailable_warning_emitted: AtomicBool,
 }
@@ -127,6 +133,8 @@ impl CodeModeService {
             default_exec_yield_time_ms: config.default_exec_yield_time_ms,
             reduction_config: RwLock::new(CodeModeReductionRuntimeConfig::from_config(config)),
             cell_scripts: Mutex::new(HashMap::new()),
+            direct_parent_intents: Mutex::new(HashMap::new()),
+            cell_parent_intents: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             unavailable_warning_emitted: AtomicBool::new(false),
         }
@@ -176,6 +184,51 @@ impl CodeModeService {
         if let Ok(mut scripts) = self.cell_scripts.lock() {
             scripts.insert(cell_id.clone(), Arc::from(source));
         }
+    }
+
+    pub(crate) fn record_direct_parent_intent(
+        &self,
+        call_id: &str,
+        parent_intent: Option<Arc<str>>,
+    ) {
+        let Some(parent_intent) = parent_intent else {
+            return;
+        };
+        if let Ok(mut intents) = self.direct_parent_intents.lock() {
+            intents.insert(call_id.to_string(), parent_intent);
+        }
+    }
+
+    pub(crate) fn move_parent_intent_to_cell(&self, call_id: &str, cell_id: &CellId) {
+        let parent_intent = self
+            .direct_parent_intents
+            .lock()
+            .ok()
+            .and_then(|mut intents| intents.remove(call_id));
+        if let Some(parent_intent) = parent_intent
+            && let Ok(mut intents) = self.cell_parent_intents.lock()
+        {
+            intents.insert(cell_id.clone(), parent_intent);
+        }
+    }
+
+    pub(crate) fn take_parent_intent(
+        &self,
+        call_id: &str,
+        source: &ToolCallSource,
+    ) -> Option<String> {
+        let parent_intent = match source {
+            ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => {
+                self.direct_parent_intents.lock().ok()?.remove(call_id)
+            }
+            ToolCallSource::CodeMode { cell_id, .. } => self
+                .cell_parent_intents
+                .lock()
+                .ok()?
+                .get(&CellId::new(cell_id.clone()))
+                .cloned(),
+        }?;
+        Some(parent_intent.to_string())
     }
 
     /// Reads the script for a cell, removing it once the cell can produce no
@@ -238,6 +291,12 @@ impl CodeModeService {
     pub(crate) async fn interrupt_active_cells(&self) {
         if let Ok(mut scripts) = self.cell_scripts.lock() {
             scripts.clear();
+        }
+        if let Ok(mut intents) = self.direct_parent_intents.lock() {
+            intents.clear();
+        }
+        if let Ok(mut intents) = self.cell_parent_intents.lock() {
+            intents.clear();
         }
         let Some(session) = self.session.get() else {
             return;
@@ -339,13 +398,24 @@ pub(super) async fn handle_runtime_response(
     let is_terminal = !matches!(response, RuntimeResponse::Yielded { .. });
     let service = &exec.session.services.code_mode_service;
     // Scoped so the borrow of `response` ends before the match below moves it.
-    let (cell_id, script) = {
+    let (cell_id, script, parent_intent) = {
         let cell_id = response_cell_id(&response);
+        let parent_intent = {
+            let mut intents = service.cell_parent_intents.lock().ok();
+            if is_terminal {
+                intents.as_mut().and_then(|intents| intents.remove(cell_id))
+            } else {
+                intents
+                    .as_ref()
+                    .and_then(|intents| intents.get(cell_id).cloned())
+            }
+        };
         (
             cell_id.to_string(),
             service
                 .cell_script(cell_id, is_terminal)
                 .map(|script| script.to_string()),
+            parent_intent.map(|parent_intent| parent_intent.to_string()),
         )
     };
     // The script-to-model boundary: everything below is what enters model context, as opposed to
@@ -358,6 +428,7 @@ pub(super) async fn handle_runtime_response(
         // say, a `rg --files` invocation, so hand the reducer the program that
         // produced it.
         script,
+        parent_intent,
         cell_id,
         script_status: script_status.clone(),
     };

@@ -272,6 +272,7 @@ pub(crate) async fn run_post_tool_use_hooks(
     turn_context: &Arc<TurnContext>,
     payload: PostToolUsePayload,
     source: &ToolCallSource,
+    parent_intent: Option<String>,
 ) -> PostToolUseOutcome {
     let (code_mode_cell_id, code_mode_tool_call_id) = match source {
         ToolCallSource::CodeMode {
@@ -298,6 +299,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         is_code_mode_nested: code_mode_cell_id.is_some(),
         code_mode_cell_id,
         code_mode_tool_call_id,
+        parent_intent,
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_post_tool_use(&request);

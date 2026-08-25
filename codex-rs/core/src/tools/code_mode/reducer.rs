@@ -84,6 +84,10 @@ pub(super) struct ReductionContext {
     /// from "script was empty".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
+    /// Bounded visible narration preceding the outer Code Mode call. Serialized
+    /// explicitly only for protocol v2 requests below.
+    #[serde(skip)]
+    pub parent_intent: Option<String>,
     /// The `Script completed` / `Script running with cell ID ...` line, before it is prepended.
     pub script_status: String,
 }
@@ -190,6 +194,8 @@ struct ReductionRequest<'a> {
     version: u32,
     #[serde(flatten)]
     context: &'a ReductionContext,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_intent: Option<&'a str>,
     max_output_tokens: usize,
     content_items: &'a [FunctionCallOutputContentItem],
 }
@@ -329,6 +335,9 @@ impl HttpCodeModeOutputReducer {
         let request = ReductionRequest {
             version: descriptor.version,
             context,
+            parent_intent: (descriptor.version == REDUCER_PROTOCOL_VERSION)
+                .then_some(context.parent_intent.as_deref())
+                .flatten(),
             max_output_tokens,
             content_items: items,
         };

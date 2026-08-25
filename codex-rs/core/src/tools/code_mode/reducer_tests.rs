@@ -57,6 +57,7 @@ fn context() -> ReductionContext {
         call_id: "call-1".to_string(),
         cell_id: "cell-1".to_string(),
         script: Some("await tools.exec_command({ cmd: 'rg --files' })".to_string()),
+        parent_intent: Some("List the repository files for review.".to_string()),
         script_status: "Script completed".to_string(),
     }
 }
@@ -405,6 +406,11 @@ async fn reduction_request_carries_the_full_original_and_its_identifiers() {
     assert_eq!(body["call_id"], json!("call-1"));
     assert_eq!(body["cell_id"], json!("cell-1"));
     assert_eq!(body["script_status"], json!("Script completed"));
+    assert_eq!(
+        body.get("parent_intent"),
+        None,
+        "legacy protocol v1 requests must remain byte-shape compatible"
+    );
     // The reducer needs to know what produced the output to summarize it well.
     assert_eq!(
         body["script"],
@@ -416,6 +422,62 @@ async fn reduction_request_carries_the_full_original_and_its_identifiers() {
         body["content_items"],
         serde_json::to_value(&original).expect("serialize original")
     );
+}
+
+#[tokio::test]
+async fn v2_reduction_request_includes_parent_intent() {
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": null
+        })))
+        .mount(&harness.server)
+        .await;
+
+    harness.reduce(large_original()).await;
+
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    let body: JsonValue = serde_json::from_slice(&requests[0].body).expect("parse request body");
+    assert_eq!(
+        body["parent_intent"],
+        "List the repository files for review."
+    );
+}
+
+#[tokio::test]
+async fn v2_reduction_request_omits_absent_parent_intent() {
+    let harness = Harness::start_v2(Duration::from_secs(5)).await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "replacement": null
+        })))
+        .mount(&harness.server)
+        .await;
+    let mut context = context();
+    context.parent_intent = None;
+
+    apply_output_reduction(
+        Some(&harness.reducer),
+        &context,
+        large_original(),
+        /*max_output_tokens*/ None,
+        /*ceiling*/ None,
+    )
+    .await;
+
+    let requests = harness
+        .server
+        .received_requests()
+        .await
+        .expect("recorded requests");
+    let body: JsonValue = serde_json::from_slice(&requests[0].body).expect("parse request body");
+    assert_eq!(body.get("parent_intent"), None);
 }
 
 /// A cell whose script is no longer known omits the field rather than sending

@@ -82,6 +82,10 @@ impl CodeModeExecuteHandler {
             .services
             .code_mode_service
             .record_cell_script(&cell_id, args.code.as_str());
+        exec.session
+            .services
+            .code_mode_service
+            .move_parent_intent_to_cell(&call_id, &cell_id);
         telemetry.cell_id = Some(cell_id.to_string());
         exec.session
             .services
