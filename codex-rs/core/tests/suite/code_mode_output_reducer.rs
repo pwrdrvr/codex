@@ -20,6 +20,7 @@ use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
+use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
@@ -38,6 +39,9 @@ use wiremock::matchers::path;
 const REDUCE_PATH: &str = "/v1/reduce-code-mode-output";
 const ACCEPT_PATH: &str = "/v1/accept-code-mode-output";
 const BRIDGE_TOKEN: &str = "integration-test-token";
+const CODE_MODE_PARENT_INTENT: &str =
+    "Inspect the completed Code Mode output and retain only what is relevant.";
+const HIDDEN_REASONING: &str = "private Code Mode reasoning must never reach the reducer";
 /// Emitted by the script below; comfortably over the trigger threshold the test
 /// configures, and recognizable in the model-visible output.
 const NOISE_LINE: &str = "at codex::frame::deep::stack::trace::line";
@@ -122,6 +126,12 @@ async fn run_script_and_read_model_visible_output(
         &server,
         sse(vec![
             ev_response_created("resp-1"),
+            ev_assistant_message("msg-parent-intent", CODE_MODE_PARENT_INTENT),
+            ev_reasoning_item(
+                "reason-parent-intent",
+                &[HIDDEN_REASONING],
+                &[HIDDEN_REASONING],
+            ),
             ev_custom_tool_call("call-1", "exec", &script),
             ev_completed("resp-1"),
         ]),
@@ -286,6 +296,11 @@ async fn a_configured_reducer_replaces_what_the_model_reads() -> Result<()> {
     assert_eq!(requests.len(), 1, "exactly one reduction per cell");
     let body: Value = serde_json::from_slice(&requests[0].body)?;
     assert_eq!(body["version"], serde_json::json!(1));
+    assert_eq!(
+        body.get("parent_intent"),
+        None,
+        "protocol v1 request shape must remain unchanged"
+    );
     assert!(
         body["script"]
             .as_str()
@@ -416,6 +431,8 @@ async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_repl
     let reduction: Value = serde_json::from_slice(&reduction_request.body)?;
     let acceptance: Value = serde_json::from_slice(&acceptance_request.body)?;
     assert_eq!(reduction["version"], serde_json::json!(2));
+    assert_eq!(reduction["parent_intent"], CODE_MODE_PARENT_INTENT);
+    assert!(!reduction.to_string().contains(HIDDEN_REASONING));
     assert_eq!(
         reduction["script"],
         PARALLEL_SCRIPT

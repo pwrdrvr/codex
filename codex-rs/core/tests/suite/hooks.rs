@@ -48,6 +48,7 @@ use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
+use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -4003,6 +4004,8 @@ async fn assert_post_tool_use_blocks_code_mode_tool_result(
         marker.display()
     );
     let command_json = serde_json::to_string(&command).context("serialize post hook command")?;
+    let parent_intent = "Inspect the nested command output before deciding what to retain.";
+    let hidden_reasoning = "private nested reasoning must never reach hooks";
     let code = format!(
         r#"
 try {{
@@ -4018,6 +4021,12 @@ try {{
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
+                ev_assistant_message("msg-parent-intent", parent_intent),
+                ev_reasoning_item(
+                    "reason-parent-intent",
+                    &[hidden_reasoning],
+                    &[hidden_reasoning],
+                ),
                 ev_custom_tool_call(&call_id, "exec", &code),
                 ev_completed("resp-1"),
             ]),
@@ -4071,6 +4080,8 @@ try {{
     assert_eq!(hook_inputs[0]["is_code_mode_nested"], true);
     assert_eq!(hook_inputs[0]["token_miser_acceptance_version"], 2);
     assert_eq!(hook_inputs[0]["token_miser_grouping_version"], 1);
+    assert_eq!(hook_inputs[0]["parent_intent"], parent_intent);
+    assert!(!hook_inputs[0].to_string().contains(hidden_reasoning));
     assert!(
         hook_inputs[0]["code_mode_cell_id"]
             .as_str()
@@ -4862,11 +4873,32 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     let call_id = "posttooluse-shell-command";
     let command = "printf post-tool-output".to_string();
     let args = serde_json::json!({ "command": command });
+    let no_intent_call_id = "posttooluse-shell-command-without-intent";
+    let no_intent_command = "printf no-intent-output".to_string();
+    let no_intent_args = serde_json::json!({ "command": no_intent_command });
+    let parent_intent = "Check the command output for the requested marker.";
+    let hidden_reasoning = "private direct reasoning must never reach hooks";
     let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
+                ev_reasoning_item(
+                    "reason-without-parent-intent",
+                    &[hidden_reasoning],
+                    &[hidden_reasoning],
+                ),
+                core_test_support::responses::ev_function_call(
+                    no_intent_call_id,
+                    "shell_command",
+                    &serde_json::to_string(&no_intent_args)?,
+                ),
+                ev_assistant_message("msg-parent-intent", parent_intent),
+                ev_reasoning_item(
+                    "reason-parent-intent",
+                    &[hidden_reasoning],
+                    &[hidden_reasoning],
+                ),
                 core_test_support::responses::ev_function_call(
                     call_id,
                     "shell_command",
@@ -4912,23 +4944,40 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
         output.contains("post-tool-output"),
         "shell command output should still reach the model",
     );
+    let no_intent_output_item = requests[1].function_call_output(no_intent_call_id);
+    let no_intent_output = no_intent_output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("no-intent shell command output string");
+    assert!(no_intent_output.contains("no-intent-output"));
 
     let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(hook_inputs[0]["hook_event_name"], "PostToolUse");
-    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
-    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
-    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert_eq!(hook_inputs[0]["is_code_mode_nested"], false);
-    assert_eq!(hook_inputs[0]["token_miser_acceptance_version"], 2);
-    assert_eq!(hook_inputs[0]["token_miser_grouping_version"], 1);
-    assert_eq!(hook_inputs[0].get("code_mode_cell_id"), None);
-    assert_eq!(hook_inputs[0].get("code_mode_tool_call_id"), None);
+    assert_eq!(hook_inputs.len(), 2);
+    let hook_input = hook_inputs
+        .iter()
+        .find(|input| input["tool_use_id"] == call_id)
+        .expect("PostToolUse input with parent intent");
+    let no_intent_hook_input = hook_inputs
+        .iter()
+        .find(|input| input["tool_use_id"] == no_intent_call_id)
+        .expect("PostToolUse input without parent intent");
+    assert_eq!(hook_input["hook_event_name"], "PostToolUse");
+    assert_eq!(hook_input["tool_name"], "Bash");
+    assert_eq!(hook_input["tool_input"]["command"], command);
+    assert_eq!(hook_input["is_code_mode_nested"], false);
+    assert_eq!(hook_input["token_miser_acceptance_version"], 2);
+    assert_eq!(hook_input["token_miser_grouping_version"], 1);
+    assert_eq!(hook_input["parent_intent"], parent_intent);
+    assert!(!hook_input.to_string().contains(hidden_reasoning));
+    assert_eq!(hook_input.get("code_mode_cell_id"), None);
+    assert_eq!(hook_input.get("code_mode_tool_call_id"), None);
     assert_eq!(
-        hook_inputs[0]["tool_response"],
+        hook_input["tool_response"],
         Value::String("post-tool-output".to_string())
     );
-    let transcript_path = hook_inputs[0]["transcript_path"]
+    assert_eq!(no_intent_hook_input.get("parent_intent"), None);
+    assert!(!no_intent_hook_input.to_string().contains(hidden_reasoning));
+    let transcript_path = hook_input["transcript_path"]
         .as_str()
         .expect("post tool use hook transcript_path");
     assert!(
@@ -4940,7 +4989,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
         "post tool use hook transcript_path should be materialized on disk",
     );
     assert!(
-        hook_inputs[0]["turn_id"]
+        hook_input["turn_id"]
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
     );

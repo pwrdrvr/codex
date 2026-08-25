@@ -48,6 +48,9 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
             code_mode_output_reducer: CodeModeOutputReducerCapability {
                 protocol_version: 2,
                 continuation_guidance_version: 1,
+                intent_context_version: 1,
+                reducer_request_field: "parent_intent".to_string(),
+                post_tool_use_field: "parent_intent".to_string(),
                 config_key: "features.code_mode.output_reducer".to_string(),
                 max_output_tokens_ceiling_config_key:
                     "features.code_mode.max_output_tokens_ceiling".to_string(),

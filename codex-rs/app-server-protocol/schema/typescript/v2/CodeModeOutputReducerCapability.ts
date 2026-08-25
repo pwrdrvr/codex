@@ -4,4 +4,4 @@
 import type { CodeModeOutputReducerAcceptanceCapability } from "./CodeModeOutputReducerAcceptanceCapability";
 import type { CodeModePostToolUseGroupingCapability } from "./CodeModePostToolUseGroupingCapability";
 
-export type CodeModeOutputReducerCapability = { protocolVersion: number, continuationGuidanceVersion: number, configKey: string, maxOutputTokensCeilingConfigKey: string, postToolUseNestedContextField: string, postToolUseGrouping: CodeModePostToolUseGroupingCapability, supportsThreadResumeOverrides: boolean, dynamicToolsResumeField: string, acceptance: CodeModeOutputReducerAcceptanceCapability, };
+export type CodeModeOutputReducerCapability = { protocolVersion: number, continuationGuidanceVersion: number, intentContextVersion: number, reducerRequestField: string, postToolUseField: string, configKey: string, maxOutputTokensCeilingConfigKey: string, postToolUseNestedContextField: string, postToolUseGrouping: CodeModePostToolUseGroupingCapability, supportsThreadResumeOverrides: boolean, dynamicToolsResumeField: string, acceptance: CodeModeOutputReducerAcceptanceCapability, };

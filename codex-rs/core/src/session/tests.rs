@@ -10966,6 +10966,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         turn_store: Arc::new(codex_extension_api::ExtensionData::new(tc.sub_id.clone())),
         tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
         cancellation_token: CancellationToken::new(),
+        parent_intent: None,
     };
 
     let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)

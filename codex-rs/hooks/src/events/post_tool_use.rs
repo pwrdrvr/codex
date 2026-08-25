@@ -37,6 +37,7 @@ pub struct PostToolUseRequest {
     pub is_code_mode_nested: bool,
     pub code_mode_cell_id: Option<String>,
     pub code_mode_tool_call_id: Option<String>,
+    pub parent_intent: Option<String>,
 }
 
 #[derive(Debug)]
@@ -183,6 +184,7 @@ fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json
         is_code_mode_nested: request.is_code_mode_nested,
         code_mode_cell_id: request.code_mode_cell_id.clone(),
         code_mode_tool_call_id: request.code_mode_tool_call_id.clone(),
+        parent_intent: request.parent_intent.clone(),
         token_miser_acceptance_version: 2,
         token_miser_grouping_version: 1,
     })
@@ -675,6 +677,7 @@ mod tests {
             is_code_mode_nested: false,
             code_mode_cell_id: None,
             code_mode_tool_call_id: None,
+            parent_intent: None,
         }
     }
 
@@ -690,11 +693,13 @@ mod tests {
         assert_eq!(direct["token_miser_grouping_version"], 1);
         assert_eq!(direct.get("code_mode_cell_id"), None);
         assert_eq!(direct.get("code_mode_tool_call_id"), None);
+        assert_eq!(direct.get("parent_intent"), None);
 
         let mut nested = request_for_tool_use("tool-2");
         nested.is_code_mode_nested = true;
         nested.code_mode_cell_id = Some("cell-1".to_string());
         nested.code_mode_tool_call_id = Some("nested-1".to_string());
+        nested.parent_intent = Some("Inspect the selected nested output.".to_string());
         let nested: serde_json::Value = serde_json::from_str(
             &super::command_input_json(&nested).expect("serialize nested hook input"),
         )
@@ -704,5 +709,9 @@ mod tests {
         assert_eq!(nested["token_miser_grouping_version"], 1);
         assert_eq!(nested["code_mode_cell_id"], "cell-1");
         assert_eq!(nested["code_mode_tool_call_id"], "nested-1");
+        assert_eq!(
+            nested["parent_intent"],
+            "Inspect the selected nested output."
+        );
     }
 }

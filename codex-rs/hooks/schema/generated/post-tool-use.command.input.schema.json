@@ -38,6 +38,10 @@
     "model": {
       "type": "string"
     },
+    "parent_intent": {
+      "description": "PwrAgent fork contract: bounded visible narration preceding the direct tool call or outer Code Mode call.",
+      "type": "string"
+    },
     "permission_mode": {
       "enum": [
         "default",
