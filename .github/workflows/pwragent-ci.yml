@@ -57,6 +57,21 @@ jobs:
           # so without this a change that breaks a caller would pass the gate
           # and only surface at release time. Debug profile: this is a link
           # check, not an artifact.
+          # `--lib` above deliberately skips core/tests/suite, which wants
+          # sandbox helpers and exec servers. This one integration test is the
+          # exception: it is the only coverage of the config -> CodeModeService
+          # -> live reducer path, which fails silently to `None` when broken.
+          - name: integration
+            # The host binary must exist on disk before the test runs:
+            # `CodeModeSessionProvider::availability` checks for the file, and
+            # without it code mode silently falls back to direct tools and every
+            # turn answers "unsupported custom tool call: exec".
+            # `cargo nextest -p codex-core` does not build it, so build it first.
+            command: >-
+              cargo build --locked --bin codex-code-mode-host &&
+              cargo nextest run --locked -p codex-core
+              --test all --no-fail-fast
+              -E 'test(code_mode_output_reducer)'
           - name: build
             command: >-
               cargo build --locked
@@ -117,14 +132,14 @@ jobs:
       # across tests, which is how global tracing-subscriber state leaked
       # between them. The justfile's own guidance is to install it this way.
       - name: Cache cargo-nextest
-        if: matrix.name == 'test'
+        if: contains(matrix.command, 'nextest')
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ~/.cargo/bin/cargo-nextest
           key: cargo-nextest-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install cargo-nextest
-        if: matrix.name == 'test'
+        if: contains(matrix.command, 'nextest')
         shell: bash
         run: |
           set -euo pipefail

@@ -16,9 +16,13 @@ use std::path::PathBuf;
 // managed config file without writing to /etc.
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
+const BUILD_VERSION: &str = match option_env!("CODEX_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 #[derive(Debug, Parser)]
-#[command(version)]
+#[command(version = BUILD_VERSION)]
 struct AppServerArgs {
     #[command(flatten)]
     config_overrides: CliConfigOverrides,

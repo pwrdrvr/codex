@@ -121,6 +121,13 @@ Without the label, `pwragent-release.yml` does not build at all — only
 `pwragent-release-check.yml` runs, which validates the contract and the pinned
 TrustedSigning client without secrets.
 
+Release builds inject the resolved downstream version into all three staged
+binaries. Development artifacts use the reviewed upstream compatibility baseline recorded in
+`scripts/pwragent-release/upstream-version.txt` plus a run-scoped
+`-pwragent.dev.N` suffix; tagged builds use the tag version. The workflow runs
+each staged binary with `--version` before packaging, so `PWRAGENT-BUILD.txt`
+and the executable identity cannot silently diverge.
+
 ### Manually (`workflow_dispatch`)
 
 A manual run builds every platform but enters no signing environment. It emits

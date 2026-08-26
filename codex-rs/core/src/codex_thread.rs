@@ -575,6 +575,16 @@ impl CodexThread {
         self.session_configured.clone()
     }
 
+    /// Returns whether this loaded thread has recorded any conversation items.
+    pub async fn has_conversation_history(&self) -> bool {
+        self.session
+            .conversation_history_snapshot()
+            .await
+            .items()
+            .next()
+            .is_some()
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         !self.io.tx_sub.is_closed()
     }
@@ -697,6 +707,21 @@ impl CodexThread {
     /// unchanged.
     pub async fn refresh_runtime_config(&self, next_config: crate::config::Config) {
         self.session.refresh_runtime_config(next_config).await;
+    }
+
+    /// Refresh only the Code Mode output reducer and token ceiling for a loaded thread.
+    pub async fn refresh_code_mode_reduction_config(&self, next_config: &crate::config::Config) {
+        self.session
+            .refresh_code_mode_reduction_config(next_config)
+            .await;
+    }
+
+    /// Replace the dynamic tools used when constructing subsequent turn contexts.
+    pub async fn refresh_dynamic_tools(
+        &self,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    ) {
+        self.session.refresh_dynamic_tools(dynamic_tools).await;
     }
 
     /// Refresh MCP configuration and managed requirements without reloading unrelated settings.

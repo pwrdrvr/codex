@@ -15,10 +15,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-release.yml"
 CHECK_WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-release-check.yml"
+UNSIGNED_WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-macos-unsigned.yml"
 WINDOWS_SIGNER_PATH = ROOT / "scripts/pwragent-release/sign-windows-binaries.ps1"
 WINDOWS_SIGNING_PREPARER_PATH = (
     ROOT / "scripts/pwragent-release/prepare-trusted-signing.ps1"
 )
+UPSTREAM_VERSION_PATH = ROOT / "scripts/pwragent-release/upstream-version.txt"
 WINDOWS_SIGNING_VERIFIER_PATH = (
     ROOT / "scripts/pwragent-release/verify-trusted-signing-tools.ps1"
 )
@@ -56,9 +58,18 @@ def job(workflow: str, name: str) -> str:
 
 workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 check_workflow = CHECK_WORKFLOW_PATH.read_text(encoding="utf-8")
+unsigned_workflow = UNSIGNED_WORKFLOW_PATH.read_text(encoding="utf-8")
 windows_signer = WINDOWS_SIGNER_PATH.read_text(encoding="utf-8")
 windows_signing_preparer = WINDOWS_SIGNING_PREPARER_PATH.read_text(encoding="utf-8")
 windows_signing_verifier = WINDOWS_SIGNING_VERIFIER_PATH.read_text(encoding="utf-8")
+upstream_version = UPSTREAM_VERSION_PATH.read_text(encoding="utf-8").strip()
+
+try:
+    upstream_version_parts = tuple(int(part) for part in upstream_version.split("."))
+except ValueError:
+    fail(f"invalid upstream version baseline: {upstream_version!r}")
+if len(upstream_version_parts) != 3 or upstream_version_parts < (0, 125, 0):
+    fail(f"upstream version baseline must be SemVer >= 0.125.0: {upstream_version!r}")
 runbook = RUNBOOK_PATH.read_text(encoding="utf-8")
 
 require(workflow, "id-token: none", "workflow")
@@ -71,6 +82,14 @@ require(workflow, "pull_request:", "workflow")
 require(workflow, "- labeled", "workflow")
 require(workflow, "- synchronize", "workflow")
 require(workflow, "'ci:release-signing'", "workflow")
+for fragment in (
+    "scripts/pwragent-release/upstream-version.txt",
+    'export CODEX_BUILD_VERSION="$CODEX_VERSION"',
+    "codex-cli ${CODEX_VERSION}",
+    "codex-app-server ${CODEX_VERSION}",
+    "codex-code-mode-host ${CODEX_VERSION}",
+):
+    require(workflow, fragment, "compiled version contract")
 for fragment in (
     "github.event.action == 'labeled' || github.event.action == 'unlabeled'",
     "github.event.label.name != 'ci:release-signing'",
@@ -200,7 +219,11 @@ for fragment in (
     require(windows_signer, fragment, "Windows signing script")
 
 # Each binary is verified after signing, not just the last one in the list.
-require(windows_signer, "foreach ($resolvedBinary in $resolvedBinaries) {", "Windows signing script")
+require(
+    windows_signer,
+    "foreach ($resolvedBinary in $resolvedBinaries) {",
+    "Windows signing script",
+)
 
 for fragment in (
     '"modules/TrustedSigning/$trustedSigningVersion/TrustedSigning.psd1"',
@@ -249,6 +272,22 @@ for fragment in (
 
 if "environment:" in check_workflow or "secrets." in check_workflow:
     fail("release signing check workflow must not enter an environment or read secrets")
+
+unsigned_workflow_code = "\n".join(
+    line for line in unsigned_workflow.splitlines() if not line.lstrip().startswith("#")
+)
+if "environment:" in unsigned_workflow_code or "secrets." in unsigned_workflow_code:
+    fail("the unsigned macOS workflow must not enter an environment or read secrets")
+for fragment in ("softprops/action-gh-release", "gh release", "contents: write"):
+    if fragment in unsigned_workflow_code:
+        fail(f"the unsigned macOS workflow must not publish ({fragment!r})")
+for fragment in (
+    "'ci:macos-unsigned'",
+    "name: unsigned-macos-aarch64",
+    "signed=no",
+    "id-token: none",
+):
+    require(unsigned_workflow, fragment, "unsigned macOS workflow")
 
 for fragment in (
     "Developer ID Application: PwrDrvr LLC (T44CNHC4UH)",

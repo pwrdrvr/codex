@@ -1,0 +1,188 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "CodeModeActionableStateCapability": {
+      "properties": {
+        "modelOutputTag": {
+          "type": "string"
+        },
+        "reducerRequestField": {
+          "type": "string"
+        },
+        "reducerResponseField": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "modelOutputTag",
+        "reducerRequestField",
+        "reducerResponseField",
+        "version"
+      ],
+      "type": "object"
+    },
+    "CodeModeOutputReducerAcceptanceCapability": {
+      "properties": {
+        "callbackVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "descriptorUrlField": {
+          "type": "string"
+        },
+        "directPostToolUse": {
+          "$ref": "#/definitions/DirectPostToolUseAcceptanceCapability"
+        },
+        "responseIdField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "callbackVersion",
+        "descriptorUrlField",
+        "directPostToolUse",
+        "responseIdField"
+      ],
+      "type": "object"
+    },
+    "CodeModeOutputReducerCapability": {
+      "properties": {
+        "acceptance": {
+          "$ref": "#/definitions/CodeModeOutputReducerAcceptanceCapability"
+        },
+        "actionableState": {
+          "$ref": "#/definitions/CodeModeActionableStateCapability"
+        },
+        "configKey": {
+          "type": "string"
+        },
+        "continuationGuidanceVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "dynamicToolsResumeField": {
+          "type": "string"
+        },
+        "intentContextVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "maxOutputTokensCeilingConfigKey": {
+          "type": "string"
+        },
+        "postToolUseField": {
+          "type": "string"
+        },
+        "postToolUseGrouping": {
+          "$ref": "#/definitions/CodeModePostToolUseGroupingCapability"
+        },
+        "postToolUseNestedContextField": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "reducerRequestField": {
+          "type": "string"
+        },
+        "supportsThreadResumeOverrides": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "acceptance",
+        "actionableState",
+        "configKey",
+        "continuationGuidanceVersion",
+        "dynamicToolsResumeField",
+        "intentContextVersion",
+        "maxOutputTokensCeilingConfigKey",
+        "postToolUseField",
+        "postToolUseGrouping",
+        "postToolUseNestedContextField",
+        "protocolVersion",
+        "reducerRequestField",
+        "supportsThreadResumeOverrides"
+      ],
+      "type": "object"
+    },
+    "CodeModePostToolUseGroupingCapability": {
+      "properties": {
+        "cellIdField": {
+          "type": "string"
+        },
+        "toolCallIdField": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "versionField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cellIdField",
+        "toolCallIdField",
+        "version",
+        "versionField"
+      ],
+      "type": "object"
+    },
+    "DirectPostToolUseAcceptanceCapability": {
+      "properties": {
+        "hookAcceptanceVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "hookAcceptanceVersionField": {
+          "type": "string"
+        },
+        "hookResponseIdField": {
+          "type": "string"
+        },
+        "sessionIdField": {
+          "type": "string"
+        },
+        "toolUseIdField": {
+          "type": "string"
+        },
+        "turnIdField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookAcceptanceVersion",
+        "hookAcceptanceVersionField",
+        "hookResponseIdField",
+        "sessionIdField",
+        "toolUseIdField",
+        "turnIdField"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "codeModeOutputReducer": {
+      "$ref": "#/definitions/CodeModeOutputReducerCapability"
+    }
+  },
+  "required": [
+    "codeModeOutputReducer"
+  ],
+  "title": "ServerCapabilitiesReadResponse",
+  "type": "object"
+}

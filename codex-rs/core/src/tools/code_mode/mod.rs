@@ -1,12 +1,17 @@
+mod actionable_state;
 mod delegate;
 mod execute_handler;
 pub(crate) mod execute_spec;
+mod reducer;
 mod response_adapter;
 mod telemetry;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -45,9 +50,15 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 
+use actionable_state::ActionableStateStore;
 use delegate::CodeModeDispatchBroker;
 use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
+use reducer::CodeModeOutputReducer;
+use reducer::HttpCodeModeOutputReducer;
+pub(crate) use reducer::PostToolUseAcceptanceContext;
+use reducer::ReductionContext;
+use reducer::apply_output_reduction;
 use response_adapter::into_function_call_output_content_items;
 pub(crate) use wait_handler::CodeModeWaitHandler;
 
@@ -72,8 +83,45 @@ pub(crate) struct CodeModeService {
     availability: Result<(), String>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
     default_exec_yield_time_ms: u64,
+    /// Runtime-refreshable settings for the script-to-model reduction boundary.
+    reduction_config: RwLock<CodeModeReductionRuntimeConfig>,
+    /// Script source per live cell, so a reduction can tell the host what
+    /// produced the output it is summarizing. `wait` resumes a cell it did not
+    /// start, so the source has to outlive the `exec` call that carried it.
+    /// Only populated when a reducer is configured.
+    cell_scripts: Mutex<HashMap<CellId, Arc<str>>>,
+    /// Bounded visible narration keyed by a direct model tool call until the
+    /// call starts or reaches PostToolUse.
+    direct_parent_intents: Mutex<HashMap<String, Arc<str>>>,
+    /// The outer `exec` narration inherited by reducer requests and nested
+    /// PostToolUse calls for the lifetime of a Code Mode cell.
+    cell_parent_intents: Mutex<HashMap<CellId, Arc<str>>>,
+    /// Codex-owned process handles observed in nested unified-exec results.
+    /// Reducers can summarize the accompanying output but cannot replace this
+    /// state without echoing it exactly.
+    actionable_states: ActionableStateStore,
     shutting_down: AtomicBool,
     unavailable_warning_emitted: AtomicBool,
+}
+
+#[derive(Clone, Default)]
+struct CodeModeReductionRuntimeConfig {
+    max_output_tokens_ceiling: Option<usize>,
+    output_reducer: Option<Arc<dyn CodeModeOutputReducer>>,
+}
+
+impl CodeModeReductionRuntimeConfig {
+    fn from_config(config: &CodeModeConfig) -> Self {
+        let output_reducer = config
+            .output_reducer
+            .clone()
+            .and_then(HttpCodeModeOutputReducer::new)
+            .map(|reducer| Arc::new(reducer) as Arc<dyn CodeModeOutputReducer>);
+        Self {
+            max_output_tokens_ceiling: config.max_output_tokens_ceiling,
+            output_reducer,
+        }
+    }
 }
 
 impl CodeModeService {
@@ -89,13 +137,121 @@ impl CodeModeService {
             availability,
             dispatch_broker,
             default_exec_yield_time_ms: config.default_exec_yield_time_ms,
+            reduction_config: RwLock::new(CodeModeReductionRuntimeConfig::from_config(config)),
+            cell_scripts: Mutex::new(HashMap::new()),
+            direct_parent_intents: Mutex::new(HashMap::new()),
+            cell_parent_intents: Mutex::new(HashMap::new()),
+            actionable_states: ActionableStateStore::default(),
             shutting_down: AtomicBool::new(false),
             unavailable_warning_emitted: AtomicBool::new(false),
         }
     }
 
+    pub(crate) async fn accept_post_tool_use_replacement(
+        &self,
+        context: PostToolUseAcceptanceContext<'_>,
+    ) {
+        let reducer = self.reduction_config().output_reducer;
+        if let Some(reducer) = reducer {
+            reducer.accept_post_tool_use(context).await;
+        }
+    }
+
     pub(crate) fn is_available(&self) -> bool {
         self.availability.is_ok()
+    }
+
+    fn reduction_config(&self) -> CodeModeReductionRuntimeConfig {
+        self.reduction_config
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn refresh_reduction_config(&self, config: &CodeModeConfig) {
+        let next = CodeModeReductionRuntimeConfig::from_config(config);
+        if next.output_reducer.is_none()
+            && let Ok(mut scripts) = self.cell_scripts.lock()
+        {
+            scripts.clear();
+        }
+        if next.output_reducer.is_none() {
+            self.actionable_states.clear();
+        }
+        *self
+            .reduction_config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+    }
+
+    /// Remembers what a cell is running so the reducer can be told. Skipped
+    /// entirely when no reducer is configured, so the default path allocates
+    /// nothing.
+    pub(crate) fn record_cell_script(&self, cell_id: &CellId, source: &str) {
+        if self.reduction_config().output_reducer.is_none() {
+            return;
+        }
+        if let Ok(mut scripts) = self.cell_scripts.lock() {
+            scripts.insert(cell_id.clone(), Arc::from(source));
+        }
+    }
+
+    pub(crate) fn record_direct_parent_intent(
+        &self,
+        call_id: &str,
+        parent_intent: Option<Arc<str>>,
+    ) {
+        let Some(parent_intent) = parent_intent else {
+            return;
+        };
+        if let Ok(mut intents) = self.direct_parent_intents.lock() {
+            intents.insert(call_id.to_string(), parent_intent);
+        }
+    }
+
+    pub(crate) fn move_parent_intent_to_cell(&self, call_id: &str, cell_id: &CellId) {
+        let parent_intent = self
+            .direct_parent_intents
+            .lock()
+            .ok()
+            .and_then(|mut intents| intents.remove(call_id));
+        if let Some(parent_intent) = parent_intent
+            && let Ok(mut intents) = self.cell_parent_intents.lock()
+        {
+            intents.insert(cell_id.clone(), parent_intent);
+        }
+    }
+
+    pub(crate) fn take_parent_intent(
+        &self,
+        call_id: &str,
+        source: &ToolCallSource,
+    ) -> Option<String> {
+        let parent_intent = match source {
+            ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => {
+                self.direct_parent_intents.lock().ok()?.remove(call_id)
+            }
+            ToolCallSource::CodeMode { cell_id, .. } => self
+                .cell_parent_intents
+                .lock()
+                .ok()?
+                .get(&CellId::new(cell_id.clone()))
+                .cloned(),
+        }?;
+        Some(parent_intent.to_string())
+    }
+
+    /// Reads the script for a cell, removing it once the cell can produce no
+    /// more output. A cell that errors before reaching `handle_runtime_response`
+    /// leaves its entry behind until the session ends; the entry is one script
+    /// source, and `interrupt_active_cells` clears the map wholesale.
+    fn cell_script(&self, cell_id: &CellId, take: bool) -> Option<Arc<str>> {
+        let mut scripts = self.cell_scripts.lock().ok()?;
+        if take {
+            scripts.remove(cell_id)
+        } else {
+            scripts.get(cell_id).cloned()
+        }
     }
 
     pub(crate) fn take_unavailable_warning(&self, tool_mode: ToolMode) -> Option<String> {
@@ -143,6 +299,16 @@ impl CodeModeService {
     }
 
     pub(crate) async fn interrupt_active_cells(&self) {
+        if let Ok(mut scripts) = self.cell_scripts.lock() {
+            scripts.clear();
+        }
+        if let Ok(mut intents) = self.direct_parent_intents.lock() {
+            intents.clear();
+        }
+        if let Ok(mut intents) = self.cell_parent_intents.lock() {
+            intents.clear();
+        }
+        self.actionable_states.clear();
         let Some(session) = self.session.get() else {
             return;
         };
@@ -232,24 +398,68 @@ impl CodeModeService {
 
 pub(super) async fn handle_runtime_response(
     exec: &ExecContext,
+    call_id: &str,
     response: RuntimeResponse,
     max_output_tokens: Option<usize>,
     started_at: std::time::Instant,
 ) -> Result<FunctionToolOutput, String> {
     let script_status = format_script_status(&response);
+    // A yielded cell can produce more output, so keep its script; anything else
+    // is finished with it.
+    let is_terminal = !matches!(response, RuntimeResponse::Yielded { .. });
+    let service = &exec.session.services.code_mode_service;
+    // Scoped so the borrow of `response` ends before the match below moves it.
+    let (cell_id, script, parent_intent, actionable_state) = {
+        let cell_id = response_cell_id(&response);
+        let parent_intent = {
+            let mut intents = service.cell_parent_intents.lock().ok();
+            if is_terminal {
+                intents.as_mut().and_then(|intents| intents.remove(cell_id))
+            } else {
+                intents
+                    .as_ref()
+                    .and_then(|intents| intents.get(cell_id).cloned())
+            }
+        };
+        (
+            cell_id.to_string(),
+            service
+                .cell_script(cell_id, is_terminal)
+                .map(|script| script.to_string()),
+            parent_intent.map(|parent_intent| parent_intent.to_string()),
+            service.actionable_states.read(cell_id, is_terminal),
+        )
+    };
+    // The script-to-model boundary: everything below is what enters model context, as opposed to
+    // the nested-tool result in `call_nested_tool`, which is returned into the running script.
+    let context = ReductionContext {
+        thread_id: exec.session.thread_id.to_string(),
+        turn_id: exec.turn.sub_id.clone(),
+        call_id: call_id.to_string(),
+        // Summarizing a wall of text is guesswork without knowing it came from,
+        // say, a `rg --files` invocation, so hand the reducer the program that
+        // produced it.
+        script,
+        parent_intent,
+        actionable_state,
+        cell_id,
+        script_status: script_status.clone(),
+    };
 
     match response {
         RuntimeResponse::Yielded { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
-            content_items = truncate_code_mode_result(content_items, max_output_tokens);
+            content_items =
+                reduce_code_mode_result(exec, &context, content_items, max_output_tokens).await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
         RuntimeResponse::Terminated { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
-            content_items = truncate_code_mode_result(content_items, max_output_tokens);
+            content_items =
+                reduce_code_mode_result(exec, &context, content_items, max_output_tokens).await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
@@ -266,13 +476,41 @@ pub(super) async fn handle_runtime_response(
                     text: format!("Script error:\n{error_text}"),
                 });
             }
-            content_items = truncate_code_mode_result(content_items, max_output_tokens);
+            content_items =
+                reduce_code_mode_result(exec, &context, content_items, max_output_tokens).await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(
                 content_items,
                 Some(success),
             ))
         }
+    }
+}
+
+/// Applies the host reduction seam, falling back to the built-in truncation in every other case.
+async fn reduce_code_mode_result(
+    exec: &ExecContext,
+    context: &ReductionContext,
+    content_items: Vec<FunctionCallOutputContentItem>,
+    max_output_tokens: Option<usize>,
+) -> Vec<FunctionCallOutputContentItem> {
+    let service = &exec.session.services.code_mode_service;
+    let reduction_config = service.reduction_config();
+    apply_output_reduction(
+        reduction_config.output_reducer.as_ref(),
+        context,
+        content_items,
+        max_output_tokens,
+        reduction_config.max_output_tokens_ceiling,
+    )
+    .await
+}
+
+fn response_cell_id(response: &RuntimeResponse) -> &CellId {
+    match response {
+        RuntimeResponse::Yielded { cell_id, .. }
+        | RuntimeResponse::Terminated { cell_id, .. }
+        | RuntimeResponse::Result { cell_id, .. } => cell_id,
     }
 }
 
@@ -343,13 +581,14 @@ async fn call_nested_tool(
         )));
     }
 
+    let actionable_state_input = input.clone();
     let payload = match build_nested_tool_payload(tool_kind, &tool_name, input) {
         Ok(payload) => payload,
         Err(error) => return Err(FunctionCallError::RespondToModel(error)),
     };
 
     let call = ToolCall {
-        tool_name: tool_name.with_default_namespace(),
+        tool_name: tool_name.clone().with_default_namespace(),
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
         payload,
         encrypted_function_args: None,
@@ -373,7 +612,17 @@ async fn call_nested_tool(
             cancellation_token,
         )
         .await?;
-    Ok(result.code_mode_result())
+    let result = result.code_mode_result();
+    let service = &exec.session.services.code_mode_service;
+    if service.reduction_config().output_reducer.is_some() {
+        service.actionable_states.record(
+            &cell_id,
+            &tool_name,
+            actionable_state_input.as_ref(),
+            &result,
+        );
+    }
+    Ok(result)
 }
 
 fn build_nested_tool_payload(

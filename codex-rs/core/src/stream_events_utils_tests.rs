@@ -295,6 +295,7 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime,
         cancellation_token: CancellationToken::new(),
+        parent_intent: None,
     };
 
     let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)

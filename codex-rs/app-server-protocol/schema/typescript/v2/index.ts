@@ -52,6 +52,10 @@ export type { ChatgptAuthTokensRefreshParams } from "./ChatgptAuthTokensRefreshP
 export type { ChatgptAuthTokensRefreshReason } from "./ChatgptAuthTokensRefreshReason";
 export type { ChatgptAuthTokensRefreshResponse } from "./ChatgptAuthTokensRefreshResponse";
 export type { CliAuthCredentialsStoreMode } from "./CliAuthCredentialsStoreMode";
+export type { CodeModeActionableStateCapability } from "./CodeModeActionableStateCapability";
+export type { CodeModeOutputReducerAcceptanceCapability } from "./CodeModeOutputReducerAcceptanceCapability";
+export type { CodeModeOutputReducerCapability } from "./CodeModeOutputReducerCapability";
+export type { CodeModePostToolUseGroupingCapability } from "./CodeModePostToolUseGroupingCapability";
 export type { CodexErrorInfo } from "./CodexErrorInfo";
 export type { CollabAgentState } from "./CollabAgentState";
 export type { CollabAgentStatus } from "./CollabAgentStatus";
@@ -101,6 +105,7 @@ export type { ContextCompactedNotification } from "./ContextCompactedNotificatio
 export type { CreditsSnapshot } from "./CreditsSnapshot";
 export type { DeprecationNoticeNotification } from "./DeprecationNoticeNotification";
 export type { DesktopOnboardingEntrypoint } from "./DesktopOnboardingEntrypoint";
+export type { DirectPostToolUseAcceptanceCapability } from "./DirectPostToolUseAcceptanceCapability";
 export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 export type { DynamicToolCallParams } from "./DynamicToolCallParams";
 export type { DynamicToolCallResponse } from "./DynamicToolCallResponse";
@@ -400,6 +405,8 @@ export type { ScheduledTaskWeekday } from "./ScheduledTaskWeekday";
 export type { SelectedCapabilityRoot } from "./SelectedCapabilityRoot";
 export type { SendAddCreditsNudgeEmailParams } from "./SendAddCreditsNudgeEmailParams";
 export type { SendAddCreditsNudgeEmailResponse } from "./SendAddCreditsNudgeEmailResponse";
+export type { ServerCapabilitiesReadParams } from "./ServerCapabilitiesReadParams";
+export type { ServerCapabilitiesReadResponse } from "./ServerCapabilitiesReadResponse";
 export type { ServerDiagnosticsGauge } from "./ServerDiagnosticsGauge";
 export type { ServerDiagnosticsProcess } from "./ServerDiagnosticsProcess";
 export type { ServerRequestResolvedNotification } from "./ServerRequestResolvedNotification";
