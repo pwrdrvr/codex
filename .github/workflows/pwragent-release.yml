@@ -77,12 +77,11 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/pwragent-v* ]]; then
             version="${GITHUB_REF_NAME#pwragent-v}"
           else
-            # Upstream leaves the workspace version at 0.0.0 on main and only
-            # bumps it on release branches, so a dev build simply carries
-            # whatever is checked in plus a run-scoped prerelease suffix.
-            upstream_version="$(sed -n \
-              '/^\[workspace.package\]$/{n;s/^version = "\(.*\)"$/\1/p;q;}' \
-              codex-rs/Cargo.toml)"
+            # Upstream main intentionally uses 0.0.0. Track the latest stable
+            # upstream release baseline for this fork in a reviewed file so
+            # development artifacts remain comparable by SemVer.
+            upstream_version="$(tr -d '[:space:]' \
+              < scripts/pwragent-release/upstream-version.txt)"
             test -n "$upstream_version"
             version="${upstream_version}-pwragent.dev.${GITHUB_RUN_NUMBER}"
           fi
@@ -168,6 +167,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export CODEX_BUILD_VERSION="$CODEX_VERSION"
           cargo build --target "${{ matrix.target }}" --release \
             --bin codex \
             --bin codex-app-server \
@@ -202,6 +202,15 @@ jobs:
           target=${{ matrix.target }}
           platform=${{ matrix.platform }}
           EOF
+
+      - name: Verify staged binary versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="stage/${{ matrix.platform }}"
+          test "$("${dest}/codex" --version)" = "codex-cli ${CODEX_VERSION}"
+          test "$("${dest}/codex-app-server" --version)" = "codex-app-server ${CODEX_VERSION}"
+          test "$("${dest}/codex-code-mode-host" --version)" = "codex-code-mode-host ${CODEX_VERSION}"
 
       - name: Package Linux distribution
         if: runner.os == 'Linux'
@@ -439,6 +448,7 @@ jobs:
         run: |
           set -euo pipefail
           export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          export CODEX_BUILD_VERSION="$CODEX_VERSION"
           cargo build --target x86_64-pc-windows-msvc --release \
             --bin codex \
             --bin codex-app-server \
@@ -481,6 +491,23 @@ jobs:
           target=x86_64-pc-windows-msvc
           platform=windows-x86_64
           "@ | Set-Content "$dest/PWRAGENT-BUILD.txt"
+
+      - name: Verify staged binary versions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dest = "stage/windows-x86_64"
+          $expected = @{
+            "codex.exe" = "codex-cli $env:CODEX_VERSION"
+            "codex-app-server.exe" = "codex-app-server $env:CODEX_VERSION"
+            "codex-code-mode-host.exe" = "codex-code-mode-host $env:CODEX_VERSION"
+          }
+          foreach ($entry in $expected.GetEnumerator()) {
+            $actual = & (Join-Path $dest $entry.Key) --version
+            if ($LASTEXITCODE -ne 0 -or $actual -ne $entry.Value) {
+              throw "$($entry.Key) version mismatch: expected '$($entry.Value)', got '$actual'"
+            }
+          }
 
       - name: Archive Windows signing input
         id: archive
