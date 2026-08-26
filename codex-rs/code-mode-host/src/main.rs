@@ -15,7 +15,13 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 const OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
 
+const BUILD_VERSION: &str = match option_env!("CODEX_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Debug, Parser)]
+#[command(version = BUILD_VERSION)]
 struct Cli {
     /// Transport endpoint: `stdio`, `stdio://`, or `grpc://IP:PORT`.
     #[arg(
