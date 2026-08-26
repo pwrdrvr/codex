@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-release.yml"
 CHECK_WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-release-check.yml"
 DEFAULT_CLIENT_PATH = ROOT / "codex-rs/login/src/auth/default_client.rs"
+ROLLOUT_RECORDER_PATH = ROOT / "codex-rs/rollout/src/recorder.rs"
 UNSIGNED_WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-macos-unsigned.yml"
 WINDOWS_SIGNER_PATH = ROOT / "scripts/pwragent-release/sign-windows-binaries.ps1"
 WINDOWS_SIGNING_PREPARER_PATH = (
@@ -60,6 +61,7 @@ def job(workflow: str, name: str) -> str:
 workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 check_workflow = CHECK_WORKFLOW_PATH.read_text(encoding="utf-8")
 default_client = DEFAULT_CLIENT_PATH.read_text(encoding="utf-8")
+rollout_recorder = ROLLOUT_RECORDER_PATH.read_text(encoding="utf-8")
 unsigned_workflow = UNSIGNED_WORKFLOW_PATH.read_text(encoding="utf-8")
 windows_signer = WINDOWS_SIGNER_PATH.read_text(encoding="utf-8")
 windows_signing_preparer = WINDOWS_SIGNING_PREPARER_PATH.read_text(encoding="utf-8")
@@ -98,6 +100,12 @@ for fragment in (
     "{}/{BUILD_VERSION}",
 ):
     require(default_client, fragment, "runtime version contract")
+for fragment in (
+    'option_env!("CODEX_BUILD_VERSION")',
+    'env!("CARGO_PKG_VERSION")',
+    "cli_version: BUILD_VERSION.to_string()",
+):
+    require(rollout_recorder, fragment, "rollout version contract")
 for fragment in (
     "github.event.action == 'labeled' || github.event.action == 'unlabeled'",
     "github.event.label.name != 'ci:release-signing'",
