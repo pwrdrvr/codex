@@ -1721,6 +1721,49 @@ text(JSON.stringify([results[0].output.includes("code-alpha-ready"), results[1].
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_short_empty_poll_waits_for_nearby_completion() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "wait for a background command from code mode",
+        r#"
+const session = await tools.exec_command({
+  cmd: "sleep 6; printf poll-complete",
+  yield_time_ms: 250,
+});
+const result = await tools.write_stdin({
+  session_id: session.session_id,
+  chars: "",
+  yield_time_ms: 1000,
+});
+
+text(JSON.stringify({
+  completed: !("session_id" in result),
+  exit_code: result.exit_code ?? null,
+  saw_output: result.output.includes("poll-complete"),
+}));
+"#,
+    )
+    .await?;
+
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let result: Value = serde_json::from_str(text_item(&items, /*index*/ 1))?;
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "completed": true,
+            "exit_code": 0,
+            "saw_output": true,
+        })
+    );
+
+    Ok(())
+}
+
 // This model uses token-based tool-output truncation, giving the downstream
 // history assertions a stable `…N tokens truncated…` marker.
 const TOKEN_POLICY_TEST_MODEL: &str = "gpt-5.4";
