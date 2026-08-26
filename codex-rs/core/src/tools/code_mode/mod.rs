@@ -696,6 +696,7 @@ mod tests {
     use super::truncate_code_mode_result;
     use crate::config::CodeModeConfig;
     use crate::config::CodeModeOutputReducerConfig;
+    use crate::config::DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE;
     use crate::tools::context::ToolPayload;
     use codex_code_mode::CellId;
     use codex_code_mode::CodeModeToolKind;
@@ -713,6 +714,9 @@ mod tests {
                 max_response_bytes: 1_024,
                 timeout: Duration::from_secs(1),
                 connect_timeout: Duration::from_secs(1),
+                tool_description_guidance: DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+                    .to_string(),
+                continuation_guidance: None,
             }),
             ..CodeModeConfig::default()
         }

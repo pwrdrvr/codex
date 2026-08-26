@@ -7734,6 +7734,9 @@
           "maxOutputTokensCeilingConfigKey": {
             "type": "string"
           },
+          "modelGuidance": {
+            "$ref": "#/definitions/v2/CodeModeOutputReducerModelGuidanceCapability"
+          },
           "postToolUseExactOutput": {
             "$ref": "#/definitions/v2/CodeModePostToolUseExactOutputCapability"
           },
@@ -7766,6 +7769,7 @@
           "dynamicToolsResumeField",
           "intentContextVersion",
           "maxOutputTokensCeilingConfigKey",
+          "modelGuidance",
           "postToolUseExactOutput",
           "postToolUseField",
           "postToolUseGrouping",
@@ -7773,6 +7777,31 @@
           "protocolVersion",
           "reducerRequestField",
           "supportsThreadResumeOverrides"
+        ],
+        "type": "object"
+      },
+      "CodeModeOutputReducerModelGuidanceCapability": {
+        "properties": {
+          "continuationConfigKey": {
+            "type": "string"
+          },
+          "modelVisibleOverheadRequestField": {
+            "type": "string"
+          },
+          "toolDescriptionConfigKey": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "continuationConfigKey",
+          "modelVisibleOverheadRequestField",
+          "toolDescriptionConfigKey",
+          "version"
         ],
         "type": "object"
       },

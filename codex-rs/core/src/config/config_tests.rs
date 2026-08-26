@@ -657,6 +657,11 @@ timeout_ms = 5000
     assert_eq!(reducer.descriptor_path, descriptor_path.to_path_buf());
     assert_eq!(reducer.min_trigger_bytes, 2_048);
     assert_eq!(reducer.timeout, Duration::from_millis(5_000));
+    assert_eq!(
+        reducer.tool_description_guidance,
+        DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+    );
+    assert_eq!(reducer.continuation_guidance, None);
     // Unset knobs fall back to the documented defaults.
     assert_eq!(
         reducer.max_request_bytes,
@@ -671,6 +676,41 @@ timeout_ms = 5000
         reducer.connect_timeout,
         Duration::from_millis(DEFAULT_CODE_MODE_REDUCER_CONNECT_TIMEOUT_MS)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn code_mode_output_reducer_accepts_model_guidance_fields() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let descriptor_path = codex_home.abs().join("token-miser/bridge.json");
+    let long_continuation = "界".repeat(600);
+    let config_toml = toml::from_str::<ConfigToml>(&format!(
+        r#"
+[features.code_mode.output_reducer]
+descriptor_path = "{}"
+tool_description_guidance = "custom tool guidance"
+continuation_guidance = "{long_continuation}"
+"#,
+        descriptor_path.to_string_lossy().escape_default()
+    ))
+    .expect("guidance fields should deserialize");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    let reducer = config
+        .code_mode
+        .output_reducer
+        .expect("output reducer should resolve");
+
+    assert_eq!(reducer.tool_description_guidance, "custom tool guidance");
+    let continuation = reducer
+        .continuation_guidance
+        .expect("continuation guidance should resolve");
+    assert_eq!(continuation.chars().count(), 512);
+    assert!(continuation.chars().all(|character| character == '界'));
     Ok(())
 }
 

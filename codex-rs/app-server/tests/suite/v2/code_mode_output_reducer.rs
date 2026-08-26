@@ -28,6 +28,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const REDUCE_PATH: &str = "/v1/reduce-code-mode-output";
 const ACCEPT_PATH: &str = "/v1/accept-code-mode-output";
 const NOISE_LINE: &str = "nested code mode output that should be reduced";
+const RESUME_TOOL_GUIDANCE: &str = "resume-configured tool guidance";
+const RESUME_CONTINUATION_GUIDANCE: &str = "resume-configured continuation guidance";
 
 fn output_text(output: &Value) -> String {
     match output {
@@ -145,6 +147,8 @@ async fn loaded_resume_before_first_turn_activates_reducer_and_dynamic_tools() -
                 "output_reducer": {
                     "descriptor_path": descriptor_path,
                     "min_trigger_bytes": 100,
+                    "tool_description_guidance": RESUME_TOOL_GUIDANCE,
+                    "continuation_guidance": RESUME_CONTINUATION_GUIDANCE,
                 }
             })),
             dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
@@ -233,10 +237,25 @@ async fn loaded_resume_before_first_turn_activates_reducer_and_dynamic_tools() -
                 .iter()
                 .any(|tool| { tool["name"].as_str() == Some("token_miser_search") }))
     );
+    let first_request = requests[0].body_json();
+    let exec_description = first_request["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                (tool["name"].as_str() == Some("exec"))
+                    .then(|| tool["description"].as_str())
+                    .flatten()
+            })
+        })
+        .expect("exec description");
+    assert!(exec_description.contains(RESUME_TOOL_GUIDANCE));
+    assert!(!exec_description.contains(RESUME_CONTINUATION_GUIDANCE));
     let reduced = output_text(&requests[1].custom_tool_call_output("call-1")["output"]);
     let unreduced = output_text(&requests[3].custom_tool_call_output("call-2")["output"]);
     let ceiling_limited = output_text(&requests[5].custom_tool_call_output("call-3")["output"]);
     assert!(reduced.contains("reducer replacement"));
+    assert!(reduced.contains(RESUME_CONTINUATION_GUIDANCE));
+    assert!(!reduced.contains(RESUME_TOOL_GUIDANCE));
     assert!(!reduced.contains(NOISE_LINE));
     assert!(unreduced.contains(NOISE_LINE));
     assert!(!unreduced.contains("reducer replacement"));

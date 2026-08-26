@@ -1,6 +1,7 @@
 use codex_app_server_protocol::CodeModeActionableStateCapability;
 use codex_app_server_protocol::CodeModeOutputReducerAcceptanceCapability;
 use codex_app_server_protocol::CodeModeOutputReducerCapability;
+use codex_app_server_protocol::CodeModeOutputReducerModelGuidanceCapability;
 use codex_app_server_protocol::CodeModePostToolUseExactOutputCapability;
 use codex_app_server_protocol::CodeModePostToolUseGroupingCapability;
 use codex_app_server_protocol::DirectPostToolUseAcceptanceCapability;
@@ -37,6 +38,15 @@ pub(crate) fn read_server_capabilities() -> ServerCapabilitiesReadResponse {
             intent_context_version: 1,
             reducer_request_field: "parent_intent".to_string(),
             post_tool_use_field: "parent_intent".to_string(),
+            model_guidance: CodeModeOutputReducerModelGuidanceCapability {
+                version: 1,
+                tool_description_config_key:
+                    "features.code_mode.output_reducer.tool_description_guidance".to_string(),
+                continuation_config_key: "features.code_mode.output_reducer.continuation_guidance"
+                    .to_string(),
+                model_visible_overhead_request_field: "model_visible_overhead_characters"
+                    .to_string(),
+            },
             actionable_state: CodeModeActionableStateCapability {
                 version: 1,
                 reducer_request_field: "actionable_state".to_string(),

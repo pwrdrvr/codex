@@ -9,6 +9,7 @@ use codex_core::TurnInputRequest;
 use codex_core::config::CodeModeOutputReducerConfig;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
+use codex_core::config::DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE;
 use codex_core::config::ThreadStoreConfig;
 use codex_features::Feature;
 use codex_history::RolloutItem;
@@ -5073,6 +5074,9 @@ async fn post_tool_use_exposes_full_exact_response_only_with_output_reducer() ->
                 max_response_bytes: 64 * 1024,
                 timeout: Duration::from_secs(5),
                 connect_timeout: Duration::from_secs(2),
+                tool_description_guidance: DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+                    .to_string(),
+                continuation_guidance: None,
             });
         });
     let test = builder.build(&server).await?;
@@ -5280,6 +5284,9 @@ async fn post_tool_use_selected_replacement_is_acknowledged_with_direct_identity
                 max_response_bytes: 64 * 1024,
                 timeout: Duration::from_secs(5),
                 connect_timeout: Duration::from_secs(2),
+                tool_description_guidance: DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+                    .to_string(),
+                continuation_guidance: None,
             });
         });
     let test = builder.build(&responses_server).await?;
@@ -5361,6 +5368,9 @@ async fn post_tool_use_unselected_response_id_keeps_original_without_acceptance(
                 max_response_bytes: 64 * 1024,
                 timeout: Duration::from_secs(5),
                 connect_timeout: Duration::from_secs(2),
+                tool_description_guidance: DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+                    .to_string(),
+                continuation_guidance: None,
             });
         });
     let test = builder.build(&responses_server).await?;

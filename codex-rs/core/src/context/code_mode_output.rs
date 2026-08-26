@@ -5,14 +5,6 @@ use super::ContextualUserFragment;
 
 const ACTIONABLE_STATE_START: &str = "<codex_actionable_state>";
 const ACTIONABLE_STATE_END: &str = "</codex_actionable_state>";
-pub(crate) const CODE_MODE_OUTPUT_REDUCTION_GUIDANCE: &str = concat!(
-    "Codex guidance: output reduction occurs only after the cell completes and does not change ",
-    "nested tool results inside JavaScript. Keep broad, independent Code Mode operations batched ",
-    "with `Promise.all`, inspect or transform their results in the cell, and emit one compact ",
-    "combined result. Use reduced summaries to triage; retrieve only the selected results that ",
-    "need deeper inspection, preferably together in a later batch."
-);
-
 /// One bounded, Codex-owned continuation handle injected into Code Mode output.
 ///
 /// A fragment contains exactly one handle so the maximum unified-exec process
@@ -132,9 +124,25 @@ impl ContextualUserFragment for CodeModeActionableStateFragment {
     }
 }
 
-/// Trusted, constant-size guidance added after a host-selected replacement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CodeModeOutputReductionGuidance;
+/// Trusted, hard-capped guidance added after a host-selected replacement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodeModeOutputReductionGuidance {
+    body: String,
+}
+
+impl CodeModeOutputReductionGuidance {
+    pub(crate) fn new(body: &str) -> Option<Self> {
+        if body.is_empty() {
+            return None;
+        }
+        Some(Self {
+            body: body
+                .chars()
+                .take(crate::config::CODE_MODE_REDUCER_GUIDANCE_MAX_CHARACTERS)
+                .collect(),
+        })
+    }
+}
 
 impl ContextualUserFragment for CodeModeOutputReductionGuidance {
     fn role(&self) -> &'static str {
@@ -150,6 +158,6 @@ impl ContextualUserFragment for CodeModeOutputReductionGuidance {
     }
 
     fn body(&self) -> String {
-        CODE_MODE_OUTPUT_REDUCTION_GUIDANCE.to_string()
+        self.body.clone()
     }
 }

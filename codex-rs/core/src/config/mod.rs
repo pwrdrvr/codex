@@ -1080,6 +1080,14 @@ pub const DEFAULT_CODE_MODE_REDUCER_TIMEOUT_MS: u64 = 20_000;
 /// Connection establishment is bounded far tighter than the whole call: nothing is listening on a
 /// loopback port in well under a second, so a slow connect means the host is gone.
 pub const DEFAULT_CODE_MODE_REDUCER_CONNECT_TIMEOUT_MS: u64 = 2_000;
+/// Neutral one-time guidance shown when a Code Mode output reducer is configured.
+pub const DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE: &str = concat!(
+    "Run independent operations concurrently with `Promise.all`. Nested results remain complete ",
+    "inside the cell; inspect or transform them there and emit the information needed for the ",
+    "next decision."
+);
+/// Hard cap for each consumer-provided model-guidance string.
+pub const CODE_MODE_REDUCER_GUIDANCE_MAX_CHARACTERS: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CodeModeConfig {
@@ -1106,6 +1114,10 @@ pub struct CodeModeOutputReducerConfig {
     pub max_response_bytes: usize,
     pub timeout: Duration,
     pub connect_timeout: Duration,
+    /// Guidance appended once to the Code Mode tool description.
+    pub tool_description_guidance: String,
+    /// Trusted guidance appended after a selected replacement, when configured.
+    pub continuation_guidance: Option<String>,
 }
 
 impl Default for CodeModeConfig {
@@ -2708,7 +2720,25 @@ fn resolve_code_mode_output_reducer_config(
         connect_timeout: Duration::from_millis(
             DEFAULT_CODE_MODE_REDUCER_CONNECT_TIMEOUT_MS.min(timeout_ms),
         ),
+        tool_description_guidance: bound_code_mode_reducer_guidance(
+            reducer
+                .tool_description_guidance
+                .as_deref()
+                .unwrap_or(DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE),
+        ),
+        continuation_guidance: reducer
+            .continuation_guidance
+            .as_deref()
+            .map(bound_code_mode_reducer_guidance)
+            .filter(|guidance| !guidance.is_empty()),
     })
+}
+
+fn bound_code_mode_reducer_guidance(guidance: &str) -> String {
+    guidance
+        .chars()
+        .take(CODE_MODE_REDUCER_GUIDANCE_MAX_CHARACTERS)
+        .collect()
 }
 
 fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config {

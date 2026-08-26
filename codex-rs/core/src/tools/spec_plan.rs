@@ -805,11 +805,13 @@ fn register_code_mode_executors(
             } else {
                 codex_code_mode::ImageDetailVisibility::Visible
             },
-            if turn_context.config.code_mode.output_reducer.is_some() {
-                OutputReductionGuidance::Include
-            } else {
-                OutputReductionGuidance::Omit
-            },
+            turn_context
+                .config
+                .code_mode
+                .output_reducer
+                .as_ref()
+                .map(|config| OutputReductionGuidance::Include(&config.tool_description_guidance))
+                .unwrap_or(OutputReductionGuidance::Omit),
         ),
         code_mode_nested_tool_specs,
     );

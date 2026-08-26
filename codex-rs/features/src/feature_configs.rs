@@ -54,8 +54,8 @@ pub struct CodeModeConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CodeModeOutputReducerToml {
-    /// Path to the host-written descriptor JSON. Protocol v2 uses
-    /// `{"version":2,"url":...,"acceptance_url":...,"token":...}`.
+    /// Path to the host-written descriptor JSON. Protocol v1 uses
+    /// `{"version":1,"url":...,"acceptance_url":...,"token":...}`.
     ///
     /// Read on every reduction so the host can restart and rotate its token without a Codex
     /// restart. The reducer stays inert while this is unset or the file is missing.
@@ -70,9 +70,17 @@ pub struct CodeModeOutputReducerToml {
     /// Discard reducer responses larger than this many bytes and fall back to truncation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_response_bytes: Option<usize>,
-    /// Total budget for reduction and the v2 acceptance callback, in milliseconds.
+    /// Total budget for reduction and the v1 acceptance callback, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Model-visible guidance appended once to the Code Mode tool description.
+    /// Hard-capped at 512 Unicode scalar characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_description_guidance: Option<String>,
+    /// Trusted model-visible guidance appended after a selected replacement.
+    /// Hard-capped at 512 Unicode scalar characters; omitted by default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuation_guidance: Option<String>,
 }
 
 impl FeatureConfig for CodeModeConfigToml {
