@@ -45,6 +45,10 @@ pub use codex_model_provider_info::RESIDENCY_HEADER_NAME;
 pub use codex_model_provider_info::ResidencyRequirement;
 pub use codex_model_provider_info::read_managed_residency_requirement as read_default_client_residency_requirement;
 pub use codex_model_provider_info::set_managed_residency_requirement as set_default_client_residency_requirement;
+const BUILD_VERSION: &str = match option_env!("CODEX_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 #[derive(Debug, Clone)]
 pub struct Originator {
@@ -153,11 +157,10 @@ pub fn get_codex_user_agent() -> String {
     // OS discovery can spawn subprocesses on Linux. Reuse it across requests,
     // while continuing to read the mutable originator and suffix below.
     static OS_INFO: LazyLock<os_info::Info> = LazyLock::new(os_info::get);
-    let build_version = env!("CARGO_PKG_VERSION");
     let os_info = &*OS_INFO;
     let originator = originator();
     let prefix = format!(
-        "{}/{build_version} ({} {}; {}) {}",
+        "{}/{BUILD_VERSION} ({} {}; {}) {}",
         originator.value.as_str(),
         os_info.os_type(),
         os_info.version(),
