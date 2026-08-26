@@ -25,6 +25,10 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const BUILD_VERSION: &str = match option_env!("CODEX_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 #[tokio::test]
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
@@ -97,7 +101,7 @@ async fn initialize_probe_does_not_override_originator() -> Result<()> {
     };
     let InitializeResponse { user_agent, .. } = to_response::<InitializeResponse>(response)?;
 
-    assert!(user_agent.starts_with("codex_cli_rs/"));
+    assert!(user_agent.starts_with(&format!("codex_cli_rs/{BUILD_VERSION} ")));
     Ok(())
 }
 
