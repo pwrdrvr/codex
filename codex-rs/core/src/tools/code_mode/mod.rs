@@ -147,14 +147,48 @@ impl CodeModeService {
         }
     }
 
-    pub(crate) async fn accept_post_tool_use_replacement(
+    pub(crate) async fn accept_post_tool_use_replacements(
         &self,
-        context: PostToolUseAcceptanceContext<'_>,
+        response_ids: &[String],
+        session_id: &str,
+        turn_id: &str,
+        tool_use_id: &str,
     ) {
         let reducer = self.reduction_config().output_reducer;
         if let Some(reducer) = reducer {
-            reducer.accept_post_tool_use(context).await;
+            join_all(response_ids.iter().map(|response_id| {
+                reducer.accept_post_tool_use(PostToolUseAcceptanceContext {
+                    response_id,
+                    session_id,
+                    turn_id,
+                    tool_use_id,
+                })
+            }))
+            .await;
         }
+    }
+
+    pub(crate) fn record_actionable_tool_result(
+        &self,
+        source: &ToolCallSource,
+        tool_name: &ToolName,
+        payload: &ToolPayload,
+        result: &JsonValue,
+    ) {
+        let ToolCallSource::CodeMode { cell_id, .. } = source else {
+            return;
+        };
+        let input = match payload {
+            ToolPayload::Function { arguments } => serde_json::from_str(arguments).ok(),
+            ToolPayload::Custom { input } => Some(JsonValue::String(input.clone())),
+            ToolPayload::ToolSearch { .. } => None,
+        };
+        self.actionable_states.record(
+            &CellId::new(cell_id.clone()),
+            tool_name,
+            input.as_ref(),
+            result,
+        );
     }
 
     pub(crate) fn is_available(&self) -> bool {
@@ -203,6 +237,12 @@ impl CodeModeService {
         };
         if let Ok(mut intents) = self.direct_parent_intents.lock() {
             intents.insert(call_id.to_string(), parent_intent);
+        }
+    }
+
+    pub(crate) fn discard_direct_parent_intent(&self, call_id: &str) {
+        if let Ok(mut intents) = self.direct_parent_intents.lock() {
+            intents.remove(call_id);
         }
     }
 
@@ -597,7 +637,6 @@ async fn call_nested_tool(
         )));
     }
 
-    let actionable_state_input = input.clone();
     let payload = match build_nested_tool_payload(tool_kind, &tool_name, input) {
         Ok(payload) => payload,
         Err(error) => return Err(FunctionCallError::RespondToModel(error)),
@@ -628,18 +667,7 @@ async fn call_nested_tool(
             cancellation_token,
         )
         .await?;
-    let result = result.code_mode_result();
-    exec.session
-        .services
-        .code_mode_service
-        .actionable_states
-        .record(
-            &cell_id,
-            &tool_name,
-            actionable_state_input.as_ref(),
-            &result,
-        );
-    Ok(result)
+    Ok(result.code_mode_result())
 }
 
 fn build_nested_tool_payload(
@@ -689,10 +717,15 @@ fn build_freeform_tool_payload(
 mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use super::CodeModeService;
     use super::build_nested_tool_payload;
+    use super::reducer::CodeModeOutputReducer;
+    use super::reducer::PostToolUseAcceptanceContext;
+    use super::reducer::ReductionContext;
     use super::truncate_code_mode_result;
     use crate::config::CodeModeConfig;
     use crate::config::CodeModeOutputReducerConfig;
@@ -703,7 +736,36 @@ mod tests {
     use codex_code_mode::DisabledCodeModeSessionProvider;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_tools::ToolName;
+    use futures::future::BoxFuture;
     use serde_json::json;
+
+    struct AcceptanceConcurrencyProbe {
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+    }
+
+    impl CodeModeOutputReducer for AcceptanceConcurrencyProbe {
+        fn reduce<'a>(
+            &'a self,
+            _context: &'a ReductionContext,
+            _items: &'a [FunctionCallOutputContentItem],
+            _max_output_tokens: usize,
+        ) -> BoxFuture<'a, Option<Vec<FunctionCallOutputContentItem>>> {
+            Box::pin(async { None })
+        }
+
+        fn accept_post_tool_use<'a>(
+            &'a self,
+            _context: PostToolUseAcceptanceContext<'a>,
+        ) -> BoxFuture<'a, ()> {
+            Box::pin(async move {
+                let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_active.fetch_max(active, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                self.active.fetch_sub(1, Ordering::SeqCst);
+            })
+        }
+    }
 
     fn reducer_config() -> CodeModeConfig {
         CodeModeConfig {
@@ -724,6 +786,31 @@ mod tests {
 
     fn service(config: &CodeModeConfig) -> CodeModeService {
         CodeModeService::new(Arc::new(DisabledCodeModeSessionProvider), config)
+    }
+
+    #[tokio::test]
+    async fn acceptance_callbacks_run_concurrently() {
+        let service = service(&CodeModeConfig::default());
+        let reducer = Arc::new(AcceptanceConcurrencyProbe {
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
+        });
+        service
+            .reduction_config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .output_reducer = Some(reducer.clone());
+
+        service
+            .accept_post_tool_use_replacements(
+                &["response-1".to_string(), "response-2".to_string()],
+                "session-id",
+                "turn-id",
+                "tool-use-id",
+            )
+            .await;
+
+        assert_eq!(reducer.max_active.load(Ordering::SeqCst), 2);
     }
 
     #[test]

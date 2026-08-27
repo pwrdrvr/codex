@@ -10,6 +10,7 @@ use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::tool_registry_for_test_step;
 use crate::tools::ToolRouter;
+use crate::tools::context::ToolCallSource;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
@@ -305,6 +306,59 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     assert_eq!(
         output.last_agent_message.as_deref(),
         Some("contributed assistant text")
+    );
+}
+
+#[tokio::test]
+async fn rejected_tool_call_discards_recorded_parent_intent() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
+    let router = Arc::new(ToolRouter::from_registry(
+        step_context.turn.as_ref(),
+        registry,
+        hosted_specs,
+        &Default::default(),
+    ));
+    let step_context = step_context.with_tool_router_for_test(router);
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), step_context, tracker);
+    let call_id = "rejected-parent-intent";
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: "unsupported_tool".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+        encrypted_function_args: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut ctx = HandleOutputCtx {
+        sess: Arc::clone(&session),
+        turn_context: Arc::clone(&turn_context),
+        turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
+        tool_runtime,
+        cancellation_token: CancellationToken::new(),
+        parent_intent: Some(Arc::from("Use the rejected tool for this step.")),
+    };
+
+    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
+        .await
+        .expect("tool call should be queued");
+    let tool_output = output
+        .tool_future
+        .expect("tool future")
+        .await
+        .expect("unsupported tool should produce a failed tool output");
+    assert!(format!("{tool_output:?}").contains("unsupported_tool"));
+    assert_eq!(
+        session
+            .services
+            .code_mode_service
+            .take_parent_intent(call_id, &ToolCallSource::Direct),
+        None
     );
 }
 

@@ -43,8 +43,13 @@ pub(crate) use approved_command_prefix_saved::APPROVED_COMMAND_PREFIX_SAVED_MESS
 pub(crate) use approved_command_prefix_saved::ApprovedCommandPrefixSaved;
 pub(crate) use apps_instructions::AppsInstructions;
 pub(crate) use available_plugins_instructions::AvailablePluginsInstructions;
+#[cfg(test)]
+pub(crate) use code_mode_output::CODE_MODE_OUTPUT_REPLACEMENT_FOOTER;
+#[cfg(test)]
+pub(crate) use code_mode_output::CODE_MODE_OUTPUT_REPLACEMENT_HEADER;
 pub(crate) use code_mode_output::CodeModeActionableStateFragment;
 pub(crate) use code_mode_output::CodeModeOutputReductionGuidance;
+pub(crate) use code_mode_output::CodeModeOutputReplacementFence;
 pub(crate) use codex_context_fragments::AdditionalContextDeveloperFragment;
 pub(crate) use codex_context_fragments::AdditionalContextUserFragment;
 pub use codex_context_fragments::ContextualUserFragment;

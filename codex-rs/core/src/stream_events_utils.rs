@@ -32,6 +32,20 @@ use tracing::debug;
 use tracing::instrument;
 use tracing::warn;
 
+struct DirectParentIntentCleanup {
+    session: Arc<Session>,
+    call_id: String,
+}
+
+impl Drop for DirectParentIntentCleanup {
+    fn drop(&mut self) {
+        self.session
+            .services
+            .code_mode_service
+            .discard_direct_parent_intent(&self.call_id);
+    }
+}
+
 fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
     let (without_citations, _) = strip_citations(text);
     if plan_mode {
@@ -322,11 +336,16 @@ pub(crate) async fn handle_output_item_done(
                 .record_direct_parent_intent(&call.call_id, ctx.parent_intent.clone());
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future: InFlightFuture<'static> = Box::pin(
-                ctx.tool_runtime
-                    .clone()
-                    .handle_tool_call(call, cancellation_token),
-            );
+            let tool_runtime = ctx.tool_runtime.clone();
+            let session = Arc::clone(&ctx.sess);
+            let call_id = call.call_id.clone();
+            let parent_intent_cleanup = DirectParentIntentCleanup { session, call_id };
+            let tool_future: InFlightFuture<'static> = Box::pin(async move {
+                let _parent_intent_cleanup = parent_intent_cleanup;
+                tool_runtime
+                    .handle_tool_call(call, cancellation_token)
+                    .await
+            });
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);

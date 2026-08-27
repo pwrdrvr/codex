@@ -767,6 +767,7 @@ async fn an_unreachable_reducer_leaves_the_turn_working() -> Result<()> {
             "version": 1,
             // Port 1 is reserved and never listening.
             "url": format!("http://127.0.0.1:1{REDUCE_PATH}"),
+            "acceptance_url": format!("http://127.0.0.1:1{ACCEPT_PATH}"),
             "token": BRIDGE_TOKEN,
         })
         .to_string(),

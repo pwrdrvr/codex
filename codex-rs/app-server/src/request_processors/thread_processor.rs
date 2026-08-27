@@ -4072,6 +4072,11 @@ impl ThreadRequestProcessor {
             }
             let config_snapshot = existing_thread.config_snapshot().await;
             if has_code_mode_reduction_config_override(params.config.as_ref()) {
+                if matches!(existing_thread.agent_status().await, AgentStatus::Running) {
+                    return Err(invalid_request(format!(
+                        "cannot refresh the Code Mode output reducer while thread {existing_thread_id} has an active turn"
+                    )));
+                }
                 let next_config = self
                     .config_manager
                     .load_for_cwd(

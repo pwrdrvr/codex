@@ -646,8 +646,25 @@ impl ToolRegistry {
                     let tool = tool.clone();
                     let response_cell = &response_cell;
                     async move {
-                        match handle_any_tool(tool.as_ref(), invocation_for_tool).await {
+                        match handle_any_tool(tool.as_ref(), invocation_for_tool.clone()).await {
                             Ok(result) => {
+                                if matches!(
+                                    invocation_for_tool.source,
+                                    ToolCallSource::CodeMode { .. }
+                                ) {
+                                    let code_mode_result =
+                                        result.result.code_mode_result(&result.payload);
+                                    invocation_for_tool
+                                        .session
+                                        .services
+                                        .code_mode_service
+                                        .record_actionable_tool_result(
+                                            &invocation_for_tool.source,
+                                            &invocation_for_tool.tool_name,
+                                            &result.payload,
+                                            &code_mode_result,
+                                        );
+                                }
                                 let preview = result.result.log_preview();
                                 let success = result.result.success_for_logging();
                                 let mut guard = response_cell.lock().await;
@@ -753,21 +770,17 @@ impl ToolRegistry {
                                 .map_or(result.call_id.as_str(), |payload| {
                                     payload.tool_use_id.as_str()
                                 });
-                            for response_id in replacement_response_ids {
-                                invocation
-                                    .session
-                                    .services
-                                    .code_mode_service
-                                    .accept_post_tool_use_replacement(
-                                        crate::tools::code_mode::PostToolUseAcceptanceContext {
-                                            response_id: &response_id,
-                                            session_id: &session_id,
-                                            turn_id: &invocation.turn.sub_id,
-                                            tool_use_id,
-                                        },
-                                    )
-                                    .await;
-                            }
+                            invocation
+                                .session
+                                .services
+                                .code_mode_service
+                                .accept_post_tool_use_replacements(
+                                    &replacement_response_ids,
+                                    &session_id,
+                                    &invocation.turn.sub_id,
+                                    tool_use_id,
+                                )
+                                .await;
                         }
                         if should_block {
                             let err = FunctionCallError::RespondToModel(feedback_message);

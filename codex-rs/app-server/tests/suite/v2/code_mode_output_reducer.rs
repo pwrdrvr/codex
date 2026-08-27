@@ -6,6 +6,8 @@ use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::DynamicToolFunctionSpec;
 use codex_app_server_protocol::DynamicToolSpec;
+use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -46,6 +48,80 @@ fn output_text(output: &Value) -> String {
 
 fn code_mode_override(value: Value) -> Option<HashMap<String, Value>> {
     Some(HashMap::from([("features.code_mode".to_string(), value)]))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loaded_resume_rejects_reducer_refresh_while_turn_is_running() -> Result<()> {
+    let model_server = responses::start_mock_server().await;
+    let delayed_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-running"),
+        responses::ev_assistant_message("msg-running", "Done"),
+        responses::ev_completed("resp-running"),
+    ]))
+    .set_delay(Duration::from_secs(2));
+    let _response_mock = responses::mount_response_once(&model_server, delayed_response).await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&model_server.uri())
+        .with_model("test-gpt-5.1-codex")
+        .enable_feature(Feature::CodeMode)
+        .write(codex_home.path())?;
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(READ_TIMEOUT)
+        .await?;
+    let started = app_server
+        .start_thread(ThreadStartParams::default())
+        .await?;
+    let turn_request_id = app_server
+        .send_turn_start_request(TurnStartParams {
+            thread_id: started.thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "keep this turn active".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    timeout(
+        READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+
+    let resume_request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: started.thread.id,
+            config: code_mode_override(json!({
+                "max_output_tokens_ceiling": 64,
+            })),
+            ..Default::default()
+        })
+        .await?;
+    let resume_error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app_server.read_stream_until_error_message(RequestId::Integer(resume_request_id)),
+    )
+    .await??;
+    assert!(
+        resume_error.error.message.contains("output reducer")
+            && resume_error.error.message.contains("active turn"),
+        "unexpected resume error: {}",
+        resume_error.error.message
+    );
+
+    timeout(
+        READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

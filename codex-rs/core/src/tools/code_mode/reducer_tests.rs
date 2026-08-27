@@ -35,6 +35,7 @@ use super::UNTRUSTED_REPLACEMENT_FOOTER;
 use super::UNTRUSTED_REPLACEMENT_HEADER;
 use super::apply_output_reduction;
 use super::clamp_max_output_tokens;
+use super::read_descriptor;
 use crate::config::CodeModeOutputReducerConfig;
 use crate::config::DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE;
 use crate::tools::code_mode::actionable_state::ActionableState;
@@ -186,6 +187,80 @@ impl Harness {
             })
             .await;
     }
+}
+
+#[tokio::test]
+async fn descriptor_rejects_non_loopback_reducer_url() {
+    let descriptor_dir = TempDir::new().expect("create descriptor dir");
+    let descriptor_path = descriptor_dir.path().join("bridge.json");
+    std::fs::write(
+        &descriptor_path,
+        json!({
+            "version": 1,
+            "url": "http://example.com/v1/reduce-code-mode-output",
+            "token": TOKEN,
+            "acceptance_url": "http://127.0.0.1:1234/v1/accept-code-mode-output",
+        })
+        .to_string(),
+    )
+    .expect("write descriptor");
+
+    assert!(read_descriptor(&descriptor_path).await.is_none());
+}
+
+#[tokio::test]
+async fn descriptor_rejects_non_loopback_acceptance_url() {
+    let descriptor_dir = TempDir::new().expect("create descriptor dir");
+    let descriptor_path = descriptor_dir.path().join("bridge.json");
+    std::fs::write(
+        &descriptor_path,
+        json!({
+            "version": 1,
+            "url": "http://127.0.0.1:1234/v1/reduce-code-mode-output",
+            "token": TOKEN,
+            "acceptance_url": "https://example.com/v1/accept-code-mode-output",
+        })
+        .to_string(),
+    )
+    .expect("write descriptor");
+
+    assert!(read_descriptor(&descriptor_path).await.is_none());
+}
+
+#[tokio::test]
+async fn reducer_does_not_follow_redirects() {
+    let harness = Harness::start(Duration::from_secs(5)).await;
+    let redirect_target = MockServer::start().await;
+    let redirect_path = "/redirect-target";
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(ResponseTemplate::new(307).insert_header(
+            "location",
+            format!("{}{redirect_path}", redirect_target.uri()),
+        ))
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(redirect_path))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response_id": "redirected-gate",
+            "replacement": [{ "type": "input_text", "text": "redirected replacement" }]
+        })))
+        .mount(&redirect_target)
+        .await;
+
+    let original = large_original();
+    let reduced = harness.reduce(original.clone()).await;
+
+    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert!(
+        redirect_target
+            .received_requests()
+            .await
+            .expect("redirect target requests")
+            .is_empty(),
+        "reducer payload must not be replayed through redirects"
+    );
 }
 
 #[tokio::test]

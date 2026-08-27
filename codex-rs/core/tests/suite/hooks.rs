@@ -4131,6 +4131,101 @@ async fn post_tool_use_exit_two_rejects_code_mode_tool_promise() -> Result<()> {
 }
 
 #[tokio::test]
+async fn blocked_terminal_code_mode_poll_does_not_retain_running_actionable_state() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_host_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-code-mode-terminal-poll";
+    let feedback = "blocked terminal poll result";
+    let code = r#"
+const session = await tools.exec_command({
+  cmd: "sleep 1; printf terminal-poll-complete",
+  shell: "/bin/sh",
+  login: false,
+  tty: false,
+  yield_time_ms: 250,
+});
+try {
+  await tools.write_stdin({
+    session_id: session.session_id,
+    chars: "",
+    yield_time_ms: 5000,
+  });
+} catch (error) {
+  text(JSON.stringify({ kind: "caught", error: String(error) }));
+}
+"#;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call(call_id, "exec", code),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "terminal poll block observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_pre_build_hook(move |home| {
+            write_post_tool_use_hook(home, Some("^Bash$"), "decision_block", feedback)
+                .expect("write blocking post tool use hook fixture");
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.enable(Feature::UnifiedExec);
+            config.code_mode.output_reducer = Some(CodeModeOutputReducerConfig {
+                descriptor_path: Path::new("unused-actionable-state-reducer.json").to_path_buf(),
+                min_trigger_bytes: usize::MAX,
+                max_request_bytes: 1024,
+                max_response_bytes: 1024,
+                timeout: Duration::from_secs(1),
+                connect_timeout: Duration::from_secs(1),
+                tool_description_guidance: DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+                    .to_string(),
+                continuation_guidance: None,
+            });
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_permission_profile(
+        "complete a background command from code mode",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output = code_mode_custom_tool_output_text(&requests[1].custom_tool_call_output(call_id));
+    assert!(output.contains(feedback), "unexpected output: {output}");
+    assert!(
+        output.contains(r#""state":"completed""#),
+        "unexpected output: {output}"
+    );
+    assert!(
+        output.contains(r#""exit_code":0"#),
+        "unexpected output: {output}"
+    );
+    assert!(
+        !output.contains(r#""state":"running""#),
+        "unexpected output: {output}"
+    );
+    assert!(!output.contains(r#""required_follow_up":{"operation":"write_stdin""#));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
