@@ -71,7 +71,7 @@ async fn initialize_pwragent(app_server: &mut TestAppServer) -> Result<()> {
     Ok(())
 }
 
-async fn run_direct_exec(bridge_response: ResponseTemplate) -> Result<(Value, Vec<Value>)> {
+async fn run_direct_exec(bridge_response: ResponseTemplate) -> Result<(Value, Vec<Value>, Value)> {
     let bridge = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/post-tool-use"))
@@ -114,6 +114,7 @@ async fn run_direct_exec(bridge_response: ResponseTemplate) -> Result<(Value, Ve
     .await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&model_server.uri()).write(codex_home.path())?;
+    let ordinary_hook_input = write_observing_post_tool_use_hook(&codex_home)?;
     let descriptor_directory = TempDir::new()?;
     let descriptor_path = write_descriptor(&descriptor_directory, &bridge)?;
     let descriptor_path = descriptor_path
@@ -158,12 +159,45 @@ async fn run_direct_exec(bridge_response: ResponseTemplate) -> Result<(Value, Ve
         .into_iter()
         .map(|request| serde_json::from_slice(&request.body))
         .collect::<Result<Vec<Value>, _>>()?;
-    Ok((model_output, bridge_requests))
+    let ordinary_hook_input = serde_json::from_slice(&std::fs::read(ordinary_hook_input)?)?;
+    Ok((model_output, bridge_requests, ordinary_hook_input))
+}
+
+fn write_observing_post_tool_use_hook(codex_home: &TempDir) -> Result<std::path::PathBuf> {
+    let script_path = codex_home.path().join("observe-post-tool-use.py");
+    let input_path = codex_home.path().join("ordinary-post-tool-use-input.json");
+    std::fs::write(
+        &script_path,
+        format!(
+            r#"import sys
+from pathlib import Path
+
+Path(r"{input_path}").write_bytes(sys.stdin.buffer.read())
+"#,
+            input_path = input_path.display(),
+        ),
+    )?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        format!(
+            r#"[hooks]
+
+[[hooks.PostToolUse]]
+matcher = '^Bash$'
+
+[[hooks.PostToolUse.hooks]]
+type = 'command'
+command = 'python3 {script_path}'
+"#,
+            script_path = script_path.display(),
+        ),
+    )?;
+    Ok(input_path)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managed_activation_replaces_exact_direct_output_without_installing_a_hook() -> Result<()> {
-    let (model_output, bridge_requests) =
+    let (model_output, bridge_requests, ordinary_hook_input) =
         run_direct_exec(ResponseTemplate::new(200).set_body_json(json!({
             "hookOutput": {
                 "continue": false,
@@ -190,6 +224,11 @@ async fn managed_activation_replaces_exact_direct_output_without_installing_a_ho
             .contains(ORIGINAL_OUTPUT)
     );
     assert_eq!(
+        ordinary_hook_input.get("token_miser_exact_tool_response"),
+        None,
+        "managed activation must not expand ordinary-hook exact-output access"
+    );
+    assert_eq!(
         bridge_requests[1],
         json!({
             "version": 1,
@@ -204,11 +243,34 @@ async fn managed_activation_replaces_exact_direct_output_without_installing_a_ho
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managed_bridge_failure_fails_open_to_original_tool_output() -> Result<()> {
-    let (model_output, bridge_requests) = run_direct_exec(ResponseTemplate::new(503)).await?;
+    let (model_output, bridge_requests, _) = run_direct_exec(ResponseTemplate::new(503)).await?;
 
     let model_output = model_output.to_string();
     assert!(model_output.contains(ORIGINAL_OUTPUT));
     assert!(!model_output.contains(REPLACEMENT));
+    assert_eq!(bridge_requests.len(), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_multibyte_replacement_over_byte_cap_fails_open() -> Result<()> {
+    let oversized_replacement = "é".repeat(4_000);
+    let (model_output, bridge_requests, _) =
+        run_direct_exec(ResponseTemplate::new(200).set_body_json(json!({
+            "hookOutput": {
+                "continue": false,
+                "stopReason": oversized_replacement,
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "response_id": "managed-response-oversized",
+                }
+            }
+        })))
+        .await?;
+
+    let model_output = model_output.to_string();
+    assert!(model_output.contains(ORIGINAL_OUTPUT));
+    assert!(!model_output.contains(&"é".repeat(4_000)));
     assert_eq!(bridge_requests.len(), 1);
     Ok(())
 }

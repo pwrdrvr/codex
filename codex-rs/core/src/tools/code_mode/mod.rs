@@ -193,13 +193,13 @@ impl CodeModeService {
 
     pub(crate) async fn accept_pwrdrvr_token_miser_replacement(
         &self,
-        response_id: &str,
+        acceptance: &pwrdrvr_token_miser::ManagedPostToolUseAcceptance,
         session_id: &str,
         turn_id: &str,
         tool_use_id: &str,
     ) {
         self.pwrdrvr_token_miser
-            .accept(response_id, session_id, turn_id, tool_use_id)
+            .accept(acceptance, session_id, turn_id, tool_use_id)
             .await;
     }
 

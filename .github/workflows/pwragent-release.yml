@@ -743,18 +743,41 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::Release $RELEASE_TAG already exists; downstream assets are immutable." >&2
-            exit 1
+          release_title="PwrAgent Codex ${VERSION}"
+          release_notes="Downstream Codex binaries for PwrDrvr products. Source commit: ${GITHUB_SHA}. macOS and Windows executables are signed by PwrDrvr LLC."
+          if existing_release="$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json body,isDraft,isPrerelease,name 2>/dev/null)"; then
+            if jq -e \
+              --arg title "$release_title" \
+              --arg notes "$release_notes" \
+              '.isDraft == true and .isPrerelease == true and .name == $title and .body == $notes' \
+              <<<"$existing_release" >/dev/null; then
+              echo "Removing matching incomplete draft release from an earlier attempt."
+              gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes
+            else
+              echo "::error::Release $RELEASE_TAG already exists; downstream assets are immutable." >&2
+              exit 1
+            fi
           fi
           marker="dist/pwragent-codex-publication-complete-v1.json"
           test -f "$marker"
           mapfile -t assets < <(find dist -maxdepth 1 -type f ! -name "$(basename "$marker")" -print | sort)
+          draft_created=false
+          cleanup_draft() {
+            if [[ "$draft_created" == true ]]; then
+              gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes || true
+            fi
+          }
+          trap cleanup_draft ERR
           gh release create "$RELEASE_TAG" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --draft \
             --prerelease \
-            --title "PwrAgent Codex ${VERSION}" \
-            --notes "Downstream Codex binaries for PwrDrvr products. Source commit: ${GITHUB_SHA}. macOS and Windows executables are signed by PwrDrvr LLC."
+            --title "$release_title" \
+            --notes "$release_notes"
+          draft_created=true
           gh release upload "$RELEASE_TAG" "$marker" --repo "$GITHUB_REPOSITORY"
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          draft_created=false
+          trap - ERR

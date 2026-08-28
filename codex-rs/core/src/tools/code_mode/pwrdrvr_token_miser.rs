@@ -12,11 +12,12 @@ use codex_http_client::HttpClientBuilder;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
+use tokio::time::Instant;
 use url::Host;
 use url::Url;
 
 pub(crate) const DESCRIPTOR_ENVIRONMENT_VARIABLE: &str =
-    "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH";
+    codex_protocol::shell_environment::PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH_ENV_VAR;
 pub(crate) const IDENTITY: &str = "pwrdrvr.pwragent.token-miser";
 pub(crate) const PROTOCOL_VERSION: u32 = 1;
 
@@ -24,14 +25,21 @@ const MAX_DESCRIPTOR_BYTES: usize = 16 * 1024;
 const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REPLACEMENT_CHARACTERS: usize = 4_000;
+const MAX_REPLACEMENT_BYTES: usize = 4_000;
 const MAX_RESPONSE_ID_CHARACTERS: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(55);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManagedPostToolUseReplacement {
     pub(crate) text: String,
-    pub(crate) response_id: String,
+    pub(crate) acceptance: ManagedPostToolUseAcceptance,
+}
+
+pub(crate) struct ManagedPostToolUseAcceptance {
+    response_id: String,
+    acceptance_url: Url,
+    token: String,
+    deadline: Instant,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,16 +142,18 @@ impl PwrdrvrTokenMiserGate {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()?;
         let descriptor = read_descriptor(&activation_nonce).await.ok()?;
-        let request_body = request.command_input_json().ok()?;
-        if request_body.len() > MAX_REQUEST_BYTES {
-            tracing::warn!(
-                request_bytes = request_body.len(),
-                limit = MAX_REQUEST_BYTES,
-                "PwrAgent Token Miser request exceeded its byte limit"
-            );
-            return None;
-        }
-        let body = request_json(client, &descriptor, request_body).await?;
+        let request_body = request
+            .command_input_json_bounded(MAX_REQUEST_BYTES)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    %error,
+                    limit = MAX_REQUEST_BYTES,
+                    "PwrAgent Token Miser request exceeded its byte limit"
+                );
+            })
+            .ok()?;
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let body = request_json(client, &descriptor, request_body, deadline).await?;
         let response = serde_json::from_slice::<BridgeResponse>(&body)
             .inspect_err(|error| {
                 tracing::warn!(%error, "PwrAgent Token Miser returned a malformed response");
@@ -153,6 +163,7 @@ impl PwrdrvrTokenMiserGate {
         if hook_output.continue_processing
             || hook_output.hook_specific_output.hook_event_name != "PostToolUse"
             || !bounded_non_empty(&hook_output.stop_reason, MAX_REPLACEMENT_CHARACTERS)
+            || hook_output.stop_reason.len() > MAX_REPLACEMENT_BYTES
             || !bounded_non_empty(
                 &hook_output.hook_specific_output.response_id,
                 MAX_RESPONSE_ID_CHARACTERS,
@@ -163,13 +174,18 @@ impl PwrdrvrTokenMiserGate {
         }
         Some(ManagedPostToolUseReplacement {
             text: hook_output.stop_reason,
-            response_id: hook_output.hook_specific_output.response_id,
+            acceptance: ManagedPostToolUseAcceptance {
+                response_id: hook_output.hook_specific_output.response_id,
+                acceptance_url: descriptor.acceptance_url,
+                token: descriptor.token,
+                deadline,
+            },
         })
     }
 
     pub(crate) async fn accept(
         &self,
-        response_id: &str,
+        acceptance_binding: &ManagedPostToolUseAcceptance,
         session_id: &str,
         turn_id: &str,
         tool_use_id: &str,
@@ -177,30 +193,19 @@ impl PwrdrvrTokenMiserGate {
         let Some(client) = self.client.as_ref() else {
             return;
         };
-        let activation_nonce = self
-            .activation_nonce
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let Some(activation_nonce) = activation_nonce else {
-            return;
-        };
-        let Ok(descriptor) = read_descriptor(&activation_nonce).await else {
-            return;
-        };
         let acceptance = PostToolUseAcceptance {
             version: PROTOCOL_VERSION,
-            response_id,
+            response_id: &acceptance_binding.response_id,
             session_id,
             turn_id,
             tool_use_id,
         };
         let callback = client
-            .post(descriptor.acceptance_url)
-            .bearer_auth(&descriptor.token)
+            .post(acceptance_binding.acceptance_url.clone())
+            .bearer_auth(&acceptance_binding.token)
             .json(&acceptance)
             .send();
-        match tokio::time::timeout(REQUEST_TIMEOUT, callback).await {
+        match tokio::time::timeout_at(acceptance_binding.deadline, callback).await {
             Ok(Ok(response)) if response.status().is_success() => {}
             Ok(Ok(response)) => tracing::warn!(
                 status = %response.status(),
@@ -223,9 +228,10 @@ pub(crate) async fn validate_activation(activation_nonce: &str) -> Result<(), St
 async fn request_json(
     client: &HttpClient,
     descriptor: &BridgeDescriptor,
-    request_body: String,
+    request_body: Vec<u8>,
+    deadline: Instant,
 ) -> Option<Vec<u8>> {
-    tokio::time::timeout(REQUEST_TIMEOUT, async {
+    tokio::time::timeout_at(deadline, async {
         let mut response = client
             .post(descriptor.url.clone())
             .bearer_auth(&descriptor.token)
