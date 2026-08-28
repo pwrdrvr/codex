@@ -3412,6 +3412,7 @@ version = "0.0.0"
 dependencies = [
  "codex-network-proxy",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "codex-utils-redacted-string",
  "pretty_assertions",
  "schemars 0.8.22",
