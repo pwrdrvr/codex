@@ -16,6 +16,14 @@
     "agent_type": {
       "type": "string"
     },
+    "code_mode_cell_id": {
+      "description": "PwrAgent fork contract: stable cell/group key for nested Code Mode tool calls.",
+      "type": "string"
+    },
+    "code_mode_tool_call_id": {
+      "description": "PwrAgent fork contract: runtime-local member key within `code_mode_cell_id`.",
+      "type": "string"
+    },
     "cwd": {
       "type": "string"
     },
@@ -23,7 +31,15 @@
       "const": "PostToolUse",
       "type": "string"
     },
+    "is_code_mode_nested": {
+      "description": "Codex extension: true when Code Mode issued this nested tool call.",
+      "type": "boolean"
+    },
     "model": {
+      "type": "string"
+    },
+    "parent_intent": {
+      "description": "PwrAgent fork contract: bounded visible narration preceding the direct tool call or outer Code Mode call.",
       "type": "string"
     },
     "permission_mode": {
@@ -38,6 +54,27 @@
     },
     "session_id": {
       "type": "string"
+    },
+    "token_miser_acceptance_version": {
+      "description": "PwrAgent fork contract: direct replacement selection acknowledgements are supported.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "token_miser_exact_tool_response": {
+      "description": "PwrAgent fork contract: full stable hook response before model-budget truncation."
+    },
+    "token_miser_exact_tool_response_version": {
+      "description": "PwrAgent fork contract: version of the optional full stable hook response.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "token_miser_grouping_version": {
+      "description": "PwrAgent fork contract: nested PostToolUse grouping fields are supported.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
     },
     "tool_input": true,
     "tool_name": {
@@ -58,9 +95,12 @@
   "required": [
     "cwd",
     "hook_event_name",
+    "is_code_mode_nested",
     "model",
     "permission_mode",
     "session_id",
+    "token_miser_acceptance_version",
+    "token_miser_grouping_version",
     "tool_input",
     "tool_name",
     "tool_response",
