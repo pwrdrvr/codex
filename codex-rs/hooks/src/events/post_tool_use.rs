@@ -41,6 +41,13 @@ pub struct PostToolUseRequest {
     pub parent_intent: Option<String>,
 }
 
+impl PostToolUseRequest {
+    /// Serializes the stable command-hook stdin contract for a managed transport.
+    pub fn command_input_json(&self) -> Result<String, serde_json::Error> {
+        command_input_json(self)
+    }
+}
+
 #[derive(Debug)]
 pub struct PostToolUseOutcome {
     pub hook_events: Vec<HookCompletedEvent>,

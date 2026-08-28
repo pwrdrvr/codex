@@ -154,6 +154,11 @@ mod thread_rollout_truncation;
 pub use thread_rollout_truncation::truncate_rollout_after_turn_id;
 pub use thread_rollout_truncation::truncate_rollout_before_turn_id;
 mod tools;
+
+/// Validates the fixed inherited PwrAgent Token Miser descriptor for activation.
+pub async fn validate_pwrdrvr_token_miser_activation(activation_nonce: &str) -> Result<(), String> {
+    tools::code_mode::pwrdrvr_token_miser::validate_activation(activation_nonce).await
+}
 pub(crate) mod turn_diff_tracker;
 mod turn_metadata;
 mod turn_timing;

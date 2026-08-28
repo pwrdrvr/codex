@@ -1292,6 +1292,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             sandbox: None,
             permissions: None,
             config: None,
+            pwrdrvr_token_miser: None,
             service_name: None,
             base_instructions: None,
             developer_instructions: None,

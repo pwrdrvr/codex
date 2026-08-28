@@ -258,6 +258,14 @@ impl CodexThread {
         self.io.submit(op).await
     }
 
+    /// Changes the per-thread PwrAgent-managed Token Miser gate binding.
+    pub fn set_pwrdrvr_token_miser_activation_nonce(&self, activation_nonce: Option<Arc<str>>) {
+        self.session
+            .services
+            .code_mode_service
+            .set_pwrdrvr_token_miser_activation_nonce(activation_nonce);
+    }
+
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
         self.session.services.session_telemetry.clone()

@@ -263,7 +263,7 @@ async fn loaded_thread_resume_dynamic_tools_omit_preserves_empty_clears_and_none
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(started)).await??;
 
     start_turn_and_wait(&mut mcp, &thread.id, "initial catalog").await?;
-    resume_with_dynamic_tools(&mut mcp, &thread.id, None).await?;
+    resume_with_dynamic_tools(&mut mcp, &thread.id, /*dynamic_tools*/ None).await?;
     start_turn_and_wait(&mut mcp, &thread.id, "omitted preserves").await?;
     resume_with_dynamic_tools(
         &mut mcp,

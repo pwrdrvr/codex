@@ -2,7 +2,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use axum::http::HeaderValue;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_analytics::AppServerRpcTransport;
+use codex_app_server_protocol::PwrdrvrTokenMiserInitializeCapability;
 use codex_login::default_client::SetOriginatorError;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
@@ -78,6 +81,7 @@ impl InitializeRequestProcessor {
         let opt_out_notification_methods = capabilities
             .opt_out_notification_methods
             .unwrap_or_default();
+        let pwrdrvr_token_miser = capabilities.pwrdrvr_token_miser;
         let ClientInfo {
             name,
             title: _title,
@@ -90,6 +94,8 @@ impl InitializeRequestProcessor {
                 "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
             )));
         }
+        let pwrdrvr_token_miser_activation_nonce =
+            validate_pwrdrvr_token_miser_initialize(&name, pwrdrvr_token_miser)?;
         let originator = name.clone();
         let user_agent_suffix = format!("{name}; {version}");
         let mutates_global_identity = !NON_ORIGINATING_CLIENT_NAMES.contains(&name.as_str());
@@ -102,6 +108,7 @@ impl InitializeRequestProcessor {
                 client_version: version,
                 request_attestation,
                 client_mcp_extensions,
+                pwrdrvr_token_miser_activation_nonce,
             })
             .is_err()
         {
@@ -189,4 +196,33 @@ impl InitializeRequestProcessor {
         self.analytics_events_client
             .track_request(connection_id.0, request_id, request);
     }
+}
+
+fn validate_pwrdrvr_token_miser_initialize(
+    client_name: &str,
+    capability: Option<PwrdrvrTokenMiserInitializeCapability>,
+) -> Result<Option<String>, JSONRPCErrorError> {
+    let Some(capability) = capability else {
+        return Ok(None);
+    };
+    if client_name != "pwragent-desktop" {
+        return Err(invalid_params(
+            "pwrdrvrTokenMiser is reserved for clientInfo.name `pwragent-desktop`",
+        ));
+    }
+    if capability.version != 1 {
+        return Err(invalid_params(format!(
+            "unsupported pwrdrvrTokenMiser initialize version {}",
+            capability.version
+        )));
+    }
+    let nonce = URL_SAFE_NO_PAD
+        .decode(&capability.activation_nonce)
+        .map_err(|_| invalid_params("pwrdrvrTokenMiser.activationNonce must be base64url"))?;
+    if nonce.len() < 32 {
+        return Err(invalid_params(
+            "pwrdrvrTokenMiser.activationNonce must contain at least 256 bits",
+        ));
+    }
+    Ok(Some(capability.activation_nonce))
 }

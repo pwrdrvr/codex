@@ -745,6 +745,7 @@ impl ToolRegistry {
                     let should_block = outcome.should_block;
                     if let Some(feedback_message) = outcome.feedback_message {
                         let replacement_response_ids = outcome.replacement_response_ids;
+                        let managed_response_id = outcome.managed_response_id;
                         if !should_block {
                             result.result = Box::new(PostToolUseFeedbackOutput {
                                 original: result.result,
@@ -773,6 +774,19 @@ impl ToolRegistry {
                                     tool_use_id,
                                 )
                                 .await;
+                            if let Some(managed_response_id) = managed_response_id.as_deref() {
+                                invocation
+                                    .session
+                                    .services
+                                    .code_mode_service
+                                    .accept_pwrdrvr_token_miser_replacement(
+                                        managed_response_id,
+                                        &session_id,
+                                        &invocation.turn.sub_id,
+                                        tool_use_id,
+                                    )
+                                    .await;
+                            }
                         }
                         if should_block {
                             let err = FunctionCallError::RespondToModel(feedback_message);

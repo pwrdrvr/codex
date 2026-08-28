@@ -65,6 +65,14 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::turn_metadata::McpTurnMetadataContext;
 
+pub(crate) struct PostToolUseDispatchOutcome {
+    pub(crate) should_block: bool,
+    pub(crate) additional_contexts: Vec<String>,
+    pub(crate) feedback_message: Option<String>,
+    pub(crate) replacement_response_ids: Vec<String>,
+    pub(crate) managed_response_id: Option<String>,
+}
+
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
     pub additional_contexts: Vec<String>,
@@ -284,7 +292,7 @@ pub(crate) async fn run_post_tool_use_hooks(
     payload: PostToolUsePayload,
     source: &ToolCallSource,
     parent_intent: Option<String>,
-) -> PostToolUseOutcome {
+) -> PostToolUseDispatchOutcome {
     let (code_mode_cell_id, code_mode_tool_call_id) = match source {
         ToolCallSource::CodeMode {
             cell_id,
@@ -293,16 +301,16 @@ pub(crate) async fn run_post_tool_use_hooks(
         ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => (None, None),
     };
     let matcher_aliases = payload.tool_name.matcher_aliases().to_vec();
-    let exact_tool_response = turn_context
-        .config
-        .code_mode
-        .output_reducer
-        .is_some()
-        .then(|| payload.tool_response.clone());
+    let exact_tool_response = (turn_context.config.code_mode.output_reducer.is_some()
+        || sess
+            .services
+            .code_mode_service
+            .pwrdrvr_token_miser_is_enabled())
+    .then(|| payload.tool_response.clone());
     let tool_response = match payload.tool_response {
         Value::String(response) => Value::String(formatted_truncate_text(
             &response,
-            turn_context.model_info.truncation_policy.into(),
+            turn_context.model_info().truncation_policy.into(),
         )),
         response => response,
     };
@@ -330,9 +338,35 @@ pub(crate) async fn run_post_tool_use_hooks(
     let preview_runs = hooks.preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
-    let outcome = hooks.run_post_tool_use(request).await;
+    let (managed_replacement, outcome) = tokio::join!(
+        sess.services
+            .code_mode_service
+            .run_pwrdrvr_token_miser(&request),
+        hooks.run_post_tool_use(request.clone()),
+    );
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
-    outcome
+    let PostToolUseOutcome {
+        hook_events: _,
+        should_block,
+        additional_contexts,
+        mut feedback_message,
+        replacement_response_ids,
+    } = outcome;
+    let managed_response_id = if should_block || feedback_message.is_some() {
+        None
+    } else {
+        managed_replacement.map(|replacement| {
+            feedback_message = Some(replacement.text);
+            replacement.response_id
+        })
+    };
+    PostToolUseDispatchOutcome {
+        should_block,
+        additional_contexts,
+        feedback_message,
+        replacement_response_ids,
+        managed_response_id,
+    }
 }
 
 #[instrument(level = "trace", skip_all)]

@@ -1,3 +1,4 @@
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde::Serialize;
 
@@ -35,6 +36,10 @@ impl CodeModeOutputReplacementFence {
 }
 
 impl ContextualUserFragment for CodeModeOutputReplacementFence {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("code_mode.output_replacement_fence".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }
@@ -158,6 +163,10 @@ impl CodeModeActionableStateFragment {
 }
 
 impl ContextualUserFragment for CodeModeActionableStateFragment {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("code_mode.actionable_state".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }
@@ -196,6 +205,10 @@ impl CodeModeOutputReductionGuidance {
 }
 
 impl ContextualUserFragment for CodeModeOutputReductionGuidance {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("code_mode.output_reduction_guidance".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }

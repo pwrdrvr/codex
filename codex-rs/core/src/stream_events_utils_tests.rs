@@ -329,6 +329,7 @@ async fn rejected_tool_call_discards_recorded_parent_intent() {
     let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
     let router = Arc::new(ToolRouter::from_registry(
         step_context.turn.as_ref(),
+        step_context.turn.model_info(),
         registry,
         hosted_specs,
         &Default::default(),

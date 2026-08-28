@@ -52,12 +52,40 @@
             "null"
           ]
         },
+        "pwrdrvrTokenMiser": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PwrdrvrTokenMiserInitializeCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Authenticate the narrowly scoped PwrAgent-managed Token Miser bridge."
+        },
         "requestAttestation": {
           "default": false,
           "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "PwrdrvrTokenMiserInitializeCapability": {
+      "properties": {
+        "activationNonce": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "activationNonce",
+        "version"
+      ],
       "type": "object"
     }
   },
