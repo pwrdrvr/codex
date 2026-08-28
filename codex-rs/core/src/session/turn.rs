@@ -3003,6 +3003,7 @@ async fn try_run_sampling_request(
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state =
         plan_mode.then(|| PlanModeStreamState::new(unfinished_plan_id.clone()));
+    let mut latest_parent_intent = None;
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
     let mut active_item_is_streaming_to_client = false;
@@ -3149,6 +3150,10 @@ async fn try_run_sampling_request(
                 sess.assign_missing_response_item_id(&mut item);
                 sess.reserve_assistant_message_order(&turn_context, &item)
                     .await;
+                let completed_assistant_message =
+                    matches!(&item, ResponseItem::Message { role, .. } if role == "assistant");
+                let completed_parent_intent =
+                    crate::parent_intent::from_response_item(&item, plan_mode);
                 if analytics_tool_call_ids.len() < MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE {
                     let call_id = match &item {
                         ResponseItem::FunctionCall { call_id, .. }
@@ -3203,6 +3208,11 @@ async fn try_run_sampling_request(
                     )
                     .await
                 {
+                    if completed_assistant_message
+                        && let Some(completed_parent_intent) = completed_parent_intent
+                    {
+                        latest_parent_intent = Some(completed_parent_intent);
+                    }
                     continue;
                 }
 
@@ -3217,6 +3227,7 @@ async fn try_run_sampling_request(
                     tool_runtime,
                     defer_tool_dispatch: *draining_for_mailbox,
                     cancellation_token: cancellation_token.child_token(),
+                    parent_intent: latest_parent_intent.clone(),
                 };
                 if *draining_for_mailbox {
                     // Retain buffered calls in history, but use the existing pre-dispatch
@@ -3268,6 +3279,11 @@ async fn try_run_sampling_request(
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
+                }
+                if completed_assistant_message
+                    && let Some(completed_parent_intent) = completed_parent_intent
+                {
+                    latest_parent_intent = Some(completed_parent_intent);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
                 // Hosts can keep the current response intact and deliver mail before the next

@@ -116,11 +116,13 @@ similar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [
+    "fs",
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
+    "time",
 ] }
 tokio-util = { workspace = true, features = ["rt"] }
 toml = { workspace = true }

@@ -13175,6 +13175,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)).await,
         defer_tool_dispatch: false,
         cancellation_token: CancellationToken::new(),
+        parent_intent: None,
     };
 
     let output = handle_output_item_done(

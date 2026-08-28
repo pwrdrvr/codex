@@ -56,6 +56,7 @@ use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Map;
+use codex_utils_output_truncation::formatted_truncate_text;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tracing::instrument;
@@ -73,6 +74,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::state::TurnState;
+use crate::tools::context::ToolCallSource;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -322,8 +324,31 @@ pub(crate) async fn run_post_tool_use_hooks(
     step_context: &StepContext,
     payload: PostToolUsePayload,
     target_environments: &[&str],
+    source: &ToolCallSource,
+    parent_intent: Option<String>,
 ) -> PostToolUseOutcome {
     let turn_context = &step_context.turn;
+    let (code_mode_cell_id, code_mode_tool_call_id) = match source {
+        ToolCallSource::CodeMode {
+            cell_id,
+            runtime_tool_call_id,
+        } => (Some(cell_id.clone()), Some(runtime_tool_call_id.clone())),
+        ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => (None, None),
+    };
+    let matcher_aliases = payload.tool_name.matcher_aliases().to_vec();
+    let exact_tool_response = turn_context
+        .config
+        .code_mode
+        .output_reducer
+        .is_some()
+        .then(|| payload.tool_response.clone());
+    let tool_response = match payload.tool_response {
+        Value::String(response) => Value::String(formatted_truncate_text(
+            &response,
+            step_context.settings.model_info.truncation_policy.into(),
+        )),
+        response => response,
+    };
     let request = PostToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -334,10 +359,15 @@ pub(crate) async fn run_post_tool_use_hooks(
         model: step_context.settings.model_info.slug.clone(),
         permission_mode: hook_permission_mode(step_context.settings.approval_policy()),
         tool_name: payload.tool_name.name().to_string(),
-        matcher_aliases: payload.tool_name.matcher_aliases().to_vec(),
+        matcher_aliases,
         tool_use_id: payload.tool_use_id,
         tool_input: payload.tool_input,
-        tool_response: payload.tool_response,
+        tool_response,
+        exact_tool_response,
+        is_code_mode_nested: code_mode_cell_id.is_some(),
+        code_mode_cell_id,
+        code_mode_tool_call_id,
+        parent_intent,
     };
     let hooks = with_tool_environment_hooks(
         sess,

@@ -34,6 +34,20 @@ use tracing::debug;
 use tracing::instrument;
 use tracing::warn;
 
+struct DirectParentIntentCleanup {
+    session: Arc<Session>,
+    call_id: String,
+}
+
+impl Drop for DirectParentIntentCleanup {
+    fn drop(&mut self) {
+        self.session
+            .services
+            .code_mode_service
+            .discard_direct_parent_intent(&self.call_id);
+    }
+}
+
 fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
     let (without_citations, _) = strip_citations(text);
     if plan_mode {
@@ -241,6 +255,7 @@ pub(crate) struct HandleOutputCtx {
     pub tool_runtime: ToolCallRuntime,
     pub defer_tool_dispatch: bool,
     pub cancellation_token: CancellationToken,
+    pub parent_intent: Option<Arc<str>>,
 }
 
 pub(crate) async fn apply_turn_item_contributors(
@@ -383,11 +398,19 @@ pub(crate) async fn handle_output_item_done(
             record_completed_response_item(ctx.sess.as_ref(), ctx.step_context.as_ref(), &item)
                 .await;
 
+            ctx.sess
+                .services
+                .code_mode_service
+                .record_direct_parent_intent(&call.call_id, ctx.parent_intent.clone());
+
             let cancellation_token = ctx.cancellation_token.child_token();
+            let session = Arc::clone(&ctx.sess);
+            let call_id = call.call_id.clone();
+            let parent_intent_cleanup = DirectParentIntentCleanup { session, call_id };
             let runtime = ctx.tool_runtime.clone();
             // handle_tool_call dispatches immediately, not when its future is polled.
             // Defer for post-model hooks or to cancel buffered calls during mailbox drains.
-            let tool_future: InFlightFuture<'static> = if ctx.defer_tool_dispatch {
+            let dispatched_tool: InFlightFuture<'static> = if ctx.defer_tool_dispatch {
                 Box::pin(async move {
                     if cancellation_token.is_cancelled() {
                         // The call is already in history; resume needs its output even if we never dispatch.
@@ -400,6 +423,10 @@ pub(crate) async fn handle_output_item_done(
             } else {
                 Box::pin(runtime.handle_tool_call(call, cancellation_token))
             };
+            let tool_future: InFlightFuture<'static> = Box::pin(async move {
+                let _parent_intent_cleanup = parent_intent_cleanup;
+                dispatched_tool.await
+            });
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
