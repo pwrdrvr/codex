@@ -164,40 +164,54 @@ max_concurrent_threads_per_session = 7
 /// Feature tables added above legacy toggles retain the lower layer's enabled state.
 #[test]
 fn merge_multi_agent_v2_table_preserves_legacy_boolean_toggle() {
-    for feature_path in ["features", "profiles.work.features"] {
-        let mut base = parse_toml(&format!("[{feature_path}]\nmulti_agent_v2 = true\n"));
-        let overlay = parse_toml(&format!(
-            "[{feature_path}.multi_agent_v2]\nsubagent_usage_hint_text = \"Delegate carefully.\"\n",
-        ));
+    for (feature, setting) in [
+        (
+            "multi_agent_v2",
+            "subagent_usage_hint_text = \"Delegate carefully.\"",
+        ),
+        ("code_mode", "max_output_tokens_ceiling = 750"),
+    ] {
+        for feature_path in ["features", "profiles.work.features"] {
+            let mut base = parse_toml(&format!("[{feature_path}]\n{feature} = true\n"));
+            let overlay = parse_toml(&format!("[{feature_path}.{feature}]\n{setting}\n"));
 
-        merge_toml_values(&mut base, &overlay);
+            merge_toml_values(&mut base, &overlay);
 
-        assert_eq!(
-            base,
-            parse_toml(&format!(
-                "[{feature_path}.multi_agent_v2]\nenabled = true\nsubagent_usage_hint_text = \"Delegate carefully.\"\n",
-            ))
-        );
+            assert_eq!(
+                base,
+                parse_toml(&format!(
+                    "[{feature_path}.{feature}]\nenabled = true\n{setting}\n",
+                ))
+            );
+        }
     }
 }
 
 /// Legacy feature toggles update enabled state without discarding nested configuration.
 #[test]
 fn merge_multi_agent_v2_boolean_preserves_existing_feature_table() {
-    for feature_path in ["features", "profiles.work.features"] {
-        let mut base = parse_toml(&format!(
-            "[{feature_path}.multi_agent_v2]\nenabled = true\nsubagent_usage_hint_text = \"Delegate carefully.\"\n",
-        ));
-        let overlay = parse_toml(&format!("[{feature_path}]\nmulti_agent_v2 = false\n"));
+    for (feature, setting) in [
+        (
+            "multi_agent_v2",
+            "subagent_usage_hint_text = \"Delegate carefully.\"",
+        ),
+        ("code_mode", "max_output_tokens_ceiling = 750"),
+    ] {
+        for feature_path in ["features", "profiles.work.features"] {
+            let mut base = parse_toml(&format!(
+                "[{feature_path}.{feature}]\nenabled = true\n{setting}\n",
+            ));
+            let overlay = parse_toml(&format!("[{feature_path}]\n{feature} = false\n"));
 
-        merge_toml_values(&mut base, &overlay);
+            merge_toml_values(&mut base, &overlay);
 
-        assert_eq!(
-            base,
-            parse_toml(&format!(
-                "[{feature_path}.multi_agent_v2]\nenabled = false\nsubagent_usage_hint_text = \"Delegate carefully.\"\n",
-            ))
-        );
+            assert_eq!(
+                base,
+                parse_toml(&format!(
+                    "[{feature_path}.{feature}]\nenabled = false\n{setting}\n",
+                ))
+            );
+        }
     }
 }
 
@@ -249,6 +263,30 @@ fn multi_agent_v2_cli_overrides_preserve_boolean_and_nested_configuration() {
             vec![instructions, enabled.clone()],
             vec![enabled.clone(), feature_table.clone()],
             vec![feature_table, enabled],
+        ] {
+            assert_eq!(crate::build_cli_overrides_layer(&overrides), expected);
+        }
+    }
+}
+
+#[test]
+fn code_mode_request_overrides_preserve_boolean_and_nested_configuration() {
+    for feature_path in ["features", "profiles.work.features"] {
+        let enabled = (
+            format!("{feature_path}.code_mode"),
+            TomlValue::Boolean(true),
+        );
+        let reducer = (
+            format!("{feature_path}.code_mode"),
+            parse_toml("max_output_tokens_ceiling = 750\n"),
+        );
+        let expected = parse_toml(&format!(
+            "[{feature_path}.code_mode]\nenabled = true\nmax_output_tokens_ceiling = 750\n",
+        ));
+
+        for overrides in [
+            vec![enabled.clone(), reducer.clone()],
+            vec![reducer.clone(), enabled.clone()],
         ] {
             assert_eq!(crate::build_cli_overrides_layer(&overrides), expected);
         }

@@ -58,6 +58,7 @@ use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::CodeModeConfigToml;
+use codex_features::CodeModeOutputReducerToml;
 use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::CurrentTimeReminderDeliveryMode;
 use codex_features::CurrentTimeSource;
@@ -134,6 +135,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config::permissions::BUILT_IN_READ_ONLY_PROFILE;
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
@@ -1049,6 +1051,44 @@ pub struct ToolRegistryConfig {
 
 const DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS: u64 = 30_000;
 
+/// Below this payload size the external reducer is skipped so ordinary results stay zero-latency.
+///
+/// This is measured per reduction, not per turn, and `wait` returns only the output produced
+/// since the last yield. A script that dribbles out small increments therefore never reaches the
+/// reducer at all, while one large burst costs exactly one reduction. The pathological case is a
+/// script sustaining large bursts across many yields, which is what this dial is for.
+///
+/// 16 KiB is roughly 4k tokens, about 40% of the `DEFAULT_MAX_OUTPUT_TOKENS` budget, so the
+/// reducer engages well before the built-in truncation would — which is the point: output can
+/// pollute context long before it is large enough to be truncated.
+pub const DEFAULT_CODE_MODE_REDUCER_MIN_TRIGGER_BYTES: usize = 16 * 1024;
+/// Above this payload size the external reducer is skipped rather than shipping a huge body.
+///
+/// Matches the request cap the reference host bridge enforces on its side.
+pub const DEFAULT_CODE_MODE_REDUCER_MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+/// Reducer responses larger than this are discarded in favor of the built-in truncation.
+pub const DEFAULT_CODE_MODE_REDUCER_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+/// Total budget for one reduction round-trip.
+///
+/// The reducer sits on the synchronous path to the output the model consumes, so this is latency
+/// the turn pays. Unlike the exec hook path there is no `DEFAULT_EXEC_COMMAND_TIMEOUT_MS` bound
+/// here, so the number is chosen rather than inherited: a model-backed reduction over a payload in
+/// the 16 KiB..32 MiB range lands in single-digit seconds, and 20s leaves headroom for a cold
+/// reducer without letting a wedged one stall a turn for longer than a typical model round-trip.
+/// Because every failure falls back to truncation, the cost of hitting this bound is latency only.
+pub const DEFAULT_CODE_MODE_REDUCER_TIMEOUT_MS: u64 = 20_000;
+/// Connection establishment is bounded far tighter than the whole call: nothing is listening on a
+/// loopback port in well under a second, so a slow connect means the host is gone.
+pub const DEFAULT_CODE_MODE_REDUCER_CONNECT_TIMEOUT_MS: u64 = 2_000;
+/// Neutral one-time guidance shown when a Code Mode output reducer is configured.
+pub const DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE: &str = concat!(
+    "Run independent operations concurrently with `Promise.all`. Nested results remain complete ",
+    "inside the cell; inspect or transform them there and emit the information needed for the ",
+    "next decision."
+);
+/// Hard cap for each consumer-provided model-guidance string.
+pub const CODE_MODE_REDUCER_GUIDANCE_MAX_CHARACTERS: usize = 512;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CodeModeConfig {
     pub default_exec_yield_time_ms: u64,
@@ -1056,6 +1096,28 @@ pub struct CodeModeConfig {
     pub direct_only_tool_namespaces: Vec<String>,
     /// Keep code mode fail-closed when the standalone host is unavailable.
     pub disable_in_process_fallback: bool,
+    /// Host-side ceiling on the model-supplied code-mode output budget, in tokens.
+    ///
+    /// `None` leaves the model's request (or the built-in default) untouched.
+    pub max_output_tokens_ceiling: Option<usize>,
+    /// Optional out-of-process reducer applied at the script-to-model boundary.
+    pub output_reducer: Option<CodeModeOutputReducerConfig>,
+}
+
+/// Resolved settings for the optional external code-mode output reducer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CodeModeOutputReducerConfig {
+    /// Descriptor JSON written by the host, re-read on every reduction.
+    pub descriptor_path: PathBuf,
+    pub min_trigger_bytes: usize,
+    pub max_request_bytes: usize,
+    pub max_response_bytes: usize,
+    pub timeout: Duration,
+    pub connect_timeout: Duration,
+    /// Guidance appended once to the Code Mode tool description.
+    pub tool_description_guidance: String,
+    /// Trusted guidance appended after a selected replacement, when configured.
+    pub continuation_guidance: Option<String>,
 }
 
 impl Default for CodeModeConfig {
@@ -1065,6 +1127,8 @@ impl Default for CodeModeConfig {
             excluded_tool_namespaces: Vec::new(),
             direct_only_tool_namespaces: Vec::new(),
             disable_in_process_fallback: false,
+            max_output_tokens_ceiling: None,
+            output_reducer: None,
         }
     }
 }
@@ -2623,7 +2687,58 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
         disable_in_process_fallback: host
             .and_then(|config| config.disable_in_process_fallback)
             .unwrap_or_default(),
+        max_output_tokens_ceiling: base
+            .and_then(|config| config.max_output_tokens_ceiling)
+            .filter(|ceiling| *ceiling > 0),
+        output_reducer: base
+            .and_then(|config| config.output_reducer.as_ref())
+            .and_then(resolve_code_mode_output_reducer_config),
     }
+}
+
+/// The reducer stays inert until the host names a descriptor file; every other knob has a default.
+fn resolve_code_mode_output_reducer_config(
+    reducer: &CodeModeOutputReducerToml,
+) -> Option<CodeModeOutputReducerConfig> {
+    let descriptor_path = reducer.descriptor_path.as_ref()?.to_path_buf();
+    let timeout_ms = reducer
+        .timeout_ms
+        .filter(|timeout_ms| *timeout_ms > 0)
+        .unwrap_or(DEFAULT_CODE_MODE_REDUCER_TIMEOUT_MS);
+    Some(CodeModeOutputReducerConfig {
+        descriptor_path,
+        min_trigger_bytes: reducer
+            .min_trigger_bytes
+            .unwrap_or(DEFAULT_CODE_MODE_REDUCER_MIN_TRIGGER_BYTES),
+        max_request_bytes: reducer
+            .max_request_bytes
+            .unwrap_or(DEFAULT_CODE_MODE_REDUCER_MAX_REQUEST_BYTES),
+        max_response_bytes: reducer
+            .max_response_bytes
+            .unwrap_or(DEFAULT_CODE_MODE_REDUCER_MAX_RESPONSE_BYTES),
+        timeout: Duration::from_millis(timeout_ms),
+        connect_timeout: Duration::from_millis(
+            DEFAULT_CODE_MODE_REDUCER_CONNECT_TIMEOUT_MS.min(timeout_ms),
+        ),
+        tool_description_guidance: bound_code_mode_reducer_guidance(
+            reducer
+                .tool_description_guidance
+                .as_deref()
+                .unwrap_or(DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE),
+        ),
+        continuation_guidance: reducer
+            .continuation_guidance
+            .as_deref()
+            .map(bound_code_mode_reducer_guidance)
+            .filter(|guidance| !guidance.is_empty()),
+    })
+}
+
+fn bound_code_mode_reducer_guidance(guidance: &str) -> String {
+    guidance
+        .chars()
+        .take(CODE_MODE_REDUCER_GUIDANCE_MAX_CHARACTERS)
+        .collect()
 }
 
 fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config {

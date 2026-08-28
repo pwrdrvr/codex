@@ -387,6 +387,20 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "max_output_tokens_ceiling": {
+          "description": "Host-side ceiling applied to the model-supplied code-mode output budget.\n\n`exec` and `wait` let the model pick `max_output_tokens` / `max_tokens`, so without a ceiling a model can ask for a budget large enough to defeat any reduction. When set, the effective budget is `min(model_request_or_default, ceiling)`.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "output_reducer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CodeModeOutputReducerToml"
+            }
+          ],
+          "description": "Optional out-of-process reducer for code-mode output on its way into model context."
         }
       },
       "type": "object"
@@ -400,6 +414,53 @@
         },
         "enabled": {
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "CodeModeOutputReducerToml": {
+      "additionalProperties": false,
+      "description": "Configures the optional external code-mode output reducer.\n\nThe reducer is contacted from the Codex process (which is not sandboxed) over loopback HTTP, using a descriptor file the host writes with mode `0600`. Reduction failures fall back to the built-in truncation, so a missing or wedged reducer never fails a turn.",
+      "properties": {
+        "continuation_guidance": {
+          "description": "Trusted model-visible guidance appended after a selected replacement. Hard-capped at 512 Unicode scalar characters; omitted by default.",
+          "type": "string"
+        },
+        "descriptor_path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Path to the host-written descriptor JSON. Protocol v1 uses `{\"version\":1,\"url\":...,\"acceptance_url\":...,\"token\":...}`.\n\nRead on every reduction so the host can restart and rotate its token without a Codex restart. The reducer stays inert while this is unset or the file is missing."
+        },
+        "max_request_bytes": {
+          "description": "Skip the reducer for payloads above this many bytes rather than streaming a huge body.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_response_bytes": {
+          "description": "Discard reducer responses larger than this many bytes and fall back to truncation.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_trigger_bytes": {
+          "description": "Skip the reducer for payloads below this many bytes so small results stay zero-latency.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "description": "Total budget for reduction and the v1 acceptance callback, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "tool_description_guidance": {
+          "description": "Model-visible guidance appended once to the Code Mode tool description. Hard-capped at 512 Unicode scalar characters.",
+          "type": "string"
         }
       },
       "type": "object"

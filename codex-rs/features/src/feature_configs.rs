@@ -1,6 +1,7 @@
 use crate::FeatureConfig;
 use crate::FeatureToml;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -33,6 +34,53 @@ pub struct CodeModeConfigToml {
     /// from the nested code-mode tool surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direct_only_tool_namespaces: Option<Vec<String>>,
+    /// Host-side ceiling applied to the model-supplied code-mode output budget.
+    ///
+    /// `exec` and `wait` let the model pick `max_output_tokens` / `max_tokens`, so without a
+    /// ceiling a model can ask for a budget large enough to defeat any reduction. When set, the
+    /// effective budget is `min(model_request_or_default, ceiling)`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens_ceiling: Option<usize>,
+    /// Optional out-of-process reducer for code-mode output on its way into model context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_reducer: Option<CodeModeOutputReducerToml>,
+}
+
+/// Configures the optional external code-mode output reducer.
+///
+/// The reducer is contacted from the Codex process (which is not sandboxed) over loopback HTTP,
+/// using a descriptor file the host writes with mode `0600`. Reduction failures fall back to the
+/// built-in truncation, so a missing or wedged reducer never fails a turn.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CodeModeOutputReducerToml {
+    /// Path to the host-written descriptor JSON. Protocol v1 uses
+    /// `{"version":1,"url":...,"acceptance_url":...,"token":...}`.
+    ///
+    /// Read on every reduction so the host can restart and rotate its token without a Codex
+    /// restart. The reducer stays inert while this is unset or the file is missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub descriptor_path: Option<AbsolutePathBuf>,
+    /// Skip the reducer for payloads below this many bytes so small results stay zero-latency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_trigger_bytes: Option<usize>,
+    /// Skip the reducer for payloads above this many bytes rather than streaming a huge body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_request_bytes: Option<usize>,
+    /// Discard reducer responses larger than this many bytes and fall back to truncation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_response_bytes: Option<usize>,
+    /// Total budget for reduction and the v1 acceptance callback, in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Model-visible guidance appended once to the Code Mode tool description.
+    /// Hard-capped at 512 Unicode scalar characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_description_guidance: Option<String>,
+    /// Trusted model-visible guidance appended after a selected replacement.
+    /// Hard-capped at 512 Unicode scalar characters; omitted by default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuation_guidance: Option<String>,
 }
 
 impl FeatureConfig for CodeModeConfigToml {

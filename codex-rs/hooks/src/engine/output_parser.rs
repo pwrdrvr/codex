@@ -41,6 +41,7 @@ pub(crate) struct PostToolUseOutput {
     pub reason: Option<String>,
     pub invalid_block_reason: Option<String>,
     pub additional_context: Option<String>,
+    pub response_id: Option<String>,
     pub invalid_reason: Option<String>,
 }
 
@@ -218,9 +219,10 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
     } else {
         None
     };
-    let additional_context = wire
-        .hook_specific_output
-        .and_then(|output| output.additional_context);
+    let (additional_context, response_id) = wire.hook_specific_output.map_or_else(
+        || (None, None),
+        |output| (output.additional_context, output.response_id),
+    );
 
     Some(PostToolUseOutput {
         universal,
@@ -228,6 +230,7 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
         reason: wire.reason,
         invalid_block_reason,
         additional_context,
+        response_id,
         invalid_reason,
     })
 }

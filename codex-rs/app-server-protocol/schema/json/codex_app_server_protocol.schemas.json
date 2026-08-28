@@ -228,6 +228,31 @@
           "type": "object"
         },
         {
+          "description": "Read stable app-server extension capabilities implemented by this binary.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "server/capabilities/read"
+              ],
+              "title": "Server/capabilities/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ServerCapabilitiesReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Server/capabilities/readRequest",
+          "type": "object"
+        },
+        {
           "description": "NEW APIs",
           "properties": {
             "id": {
@@ -7632,6 +7657,200 @@
         ],
         "type": "string"
       },
+      "CodeModeActionableStateCapability": {
+        "properties": {
+          "modelOutputTag": {
+            "type": "string"
+          },
+          "reducerRequestField": {
+            "type": "string"
+          },
+          "reducerResponseField": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "modelOutputTag",
+          "reducerRequestField",
+          "reducerResponseField",
+          "version"
+        ],
+        "type": "object"
+      },
+      "CodeModeOutputReducerAcceptanceCapability": {
+        "properties": {
+          "callbackVersion": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "descriptorUrlField": {
+            "type": "string"
+          },
+          "directPostToolUse": {
+            "$ref": "#/definitions/v2/DirectPostToolUseAcceptanceCapability"
+          },
+          "responseIdField": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "callbackVersion",
+          "descriptorUrlField",
+          "directPostToolUse",
+          "responseIdField"
+        ],
+        "type": "object"
+      },
+      "CodeModeOutputReducerCapability": {
+        "properties": {
+          "acceptance": {
+            "$ref": "#/definitions/v2/CodeModeOutputReducerAcceptanceCapability"
+          },
+          "actionableState": {
+            "$ref": "#/definitions/v2/CodeModeActionableStateCapability"
+          },
+          "configKey": {
+            "type": "string"
+          },
+          "continuationGuidanceVersion": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "dynamicToolsResumeField": {
+            "type": "string"
+          },
+          "intentContextVersion": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxOutputTokensCeilingConfigKey": {
+            "type": "string"
+          },
+          "modelGuidance": {
+            "$ref": "#/definitions/v2/CodeModeOutputReducerModelGuidanceCapability"
+          },
+          "postToolUseExactOutput": {
+            "$ref": "#/definitions/v2/CodeModePostToolUseExactOutputCapability"
+          },
+          "postToolUseField": {
+            "type": "string"
+          },
+          "postToolUseGrouping": {
+            "$ref": "#/definitions/v2/CodeModePostToolUseGroupingCapability"
+          },
+          "postToolUseNestedContextField": {
+            "type": "string"
+          },
+          "protocolVersion": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "reducerRequestField": {
+            "type": "string"
+          },
+          "supportsThreadResumeOverrides": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acceptance",
+          "actionableState",
+          "configKey",
+          "continuationGuidanceVersion",
+          "dynamicToolsResumeField",
+          "intentContextVersion",
+          "maxOutputTokensCeilingConfigKey",
+          "modelGuidance",
+          "postToolUseExactOutput",
+          "postToolUseField",
+          "postToolUseGrouping",
+          "postToolUseNestedContextField",
+          "protocolVersion",
+          "reducerRequestField",
+          "supportsThreadResumeOverrides"
+        ],
+        "type": "object"
+      },
+      "CodeModeOutputReducerModelGuidanceCapability": {
+        "properties": {
+          "continuationConfigKey": {
+            "type": "string"
+          },
+          "modelVisibleOverheadRequestField": {
+            "type": "string"
+          },
+          "toolDescriptionConfigKey": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "continuationConfigKey",
+          "modelVisibleOverheadRequestField",
+          "toolDescriptionConfigKey",
+          "version"
+        ],
+        "type": "object"
+      },
+      "CodeModePostToolUseExactOutputCapability": {
+        "properties": {
+          "responseField": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "versionField": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "responseField",
+          "version",
+          "versionField"
+        ],
+        "type": "object"
+      },
+      "CodeModePostToolUseGroupingCapability": {
+        "properties": {
+          "cellIdField": {
+            "type": "string"
+          },
+          "toolCallIdField": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "versionField": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cellIdField",
+          "toolCallIdField",
+          "version",
+          "versionField"
+        ],
+        "type": "object"
+      },
       "CodexErrorInfo": {
         "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
         "oneOf": [
@@ -9667,6 +9886,39 @@
           "life_sciences"
         ],
         "type": "string"
+      },
+      "DirectPostToolUseAcceptanceCapability": {
+        "properties": {
+          "hookAcceptanceVersion": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "hookAcceptanceVersionField": {
+            "type": "string"
+          },
+          "hookResponseIdField": {
+            "type": "string"
+          },
+          "sessionIdField": {
+            "type": "string"
+          },
+          "toolUseIdField": {
+            "type": "string"
+          },
+          "turnIdField": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hookAcceptanceVersion",
+          "hookAcceptanceVersionField",
+          "hookResponseIdField",
+          "sessionIdField",
+          "toolUseIdField",
+          "turnIdField"
+        ],
+        "type": "object"
       },
       "DynamicToolCallOutputContentItem": {
         "oneOf": [
@@ -18233,6 +18485,24 @@
           "status"
         ],
         "title": "SendAddCreditsNudgeEmailResponse",
+        "type": "object"
+      },
+      "ServerCapabilitiesReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ServerCapabilitiesReadParams",
+        "type": "object"
+      },
+      "ServerCapabilitiesReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "codeModeOutputReducer": {
+            "$ref": "#/definitions/v2/CodeModeOutputReducerCapability"
+          }
+        },
+        "required": [
+          "codeModeOutputReducer"
+        ],
+        "title": "ServerCapabilitiesReadResponse",
         "type": "object"
       },
       "ServerDiagnosticsGauge": {

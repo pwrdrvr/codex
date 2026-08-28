@@ -4,6 +4,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::image_preparation::unified_image_budget_enabled;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::code_mode::execute_spec::OutputReductionGuidance;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
 use crate::tools::effective_tool_mode;
@@ -804,6 +805,13 @@ fn register_code_mode_executors(
             } else {
                 codex_code_mode::ImageDetailVisibility::Visible
             },
+            turn_context
+                .config
+                .code_mode
+                .output_reducer
+                .as_ref()
+                .map(|config| OutputReductionGuidance::Include(&config.tool_description_guidance))
+                .unwrap_or(OutputReductionGuidance::Omit),
         ),
         code_mode_nested_tool_specs,
     );

@@ -58,15 +58,17 @@ pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
     merge_toml_values_at_path(base, overlay, &mut Vec::new());
 }
 
-pub(crate) fn is_multi_agent_v2_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
+pub(crate) fn is_structured_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
+    fn supports_legacy_boolean<S: AsRef<str>>(feature: &S) -> bool {
+        matches!(feature.as_ref(), "code_mode" | "multi_agent_v2")
+    }
+
     match path {
-        [features, feature] => {
-            features.as_ref() == "features" && feature.as_ref() == "multi_agent_v2"
-        }
+        [features, feature] => features.as_ref() == "features" && supports_legacy_boolean(feature),
         [profiles, _, features, feature] => {
             profiles.as_ref() == "profiles"
                 && features.as_ref() == "features"
-                && feature.as_ref() == "multi_agent_v2"
+                && supports_legacy_boolean(feature)
         }
         _ => false,
     }
@@ -75,7 +77,7 @@ pub(crate) fn is_multi_agent_v2_feature_path<S: AsRef<str>>(path: &[S]) -> bool 
 fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &mut Vec<String>) {
     replace_shell_environment_policy_filter_representation(base, overlay, path);
 
-    if is_multi_agent_v2_feature_path(path) {
+    if is_structured_feature_path(path) {
         if let TomlValue::Boolean(enabled) = base
             && overlay.is_table()
         {

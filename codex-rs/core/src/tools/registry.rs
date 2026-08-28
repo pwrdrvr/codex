@@ -16,6 +16,7 @@ use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -645,8 +646,25 @@ impl ToolRegistry {
                     let tool = tool.clone();
                     let response_cell = &response_cell;
                     async move {
-                        match handle_any_tool(tool.as_ref(), invocation_for_tool).await {
+                        match handle_any_tool(tool.as_ref(), invocation_for_tool.clone()).await {
                             Ok(result) => {
+                                if matches!(
+                                    invocation_for_tool.source,
+                                    ToolCallSource::CodeMode { .. }
+                                ) {
+                                    let code_mode_result =
+                                        result.result.code_mode_result(&result.payload);
+                                    invocation_for_tool
+                                        .session
+                                        .services
+                                        .code_mode_service
+                                        .record_actionable_tool_result(
+                                            &invocation_for_tool.source,
+                                            &invocation_for_tool.tool_name,
+                                            &result.payload,
+                                            &code_mode_result,
+                                        );
+                                }
                                 let preview = result.result.log_preview();
                                 let success = result.result.success_for_logging();
                                 let mut guard = response_cell.lock().await;
@@ -663,6 +681,12 @@ impl ToolRegistry {
             Ok((_, success)) => *success,
             Err(_) => false,
         };
+        let is_code_mode_nested = matches!(invocation.source, ToolCallSource::CodeMode { .. });
+        let parent_intent = invocation
+            .session
+            .services
+            .code_mode_service
+            .take_parent_intent(&invocation.call_id, &invocation.source);
         emit_metric_for_tool_read(&invocation, success);
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
@@ -677,11 +701,9 @@ impl ToolRegistry {
                 run_post_tool_use_hooks(
                     &invocation.session,
                     &invocation.turn,
-                    post_tool_use_payload.tool_use_id,
-                    post_tool_use_payload.tool_name.name().to_string(),
-                    post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
-                    post_tool_use_payload.tool_input,
-                    post_tool_use_payload.tool_response,
+                    post_tool_use_payload,
+                    &invocation.source,
+                    parent_intent,
                 )
                 .await,
             )
@@ -728,22 +750,49 @@ impl ToolRegistry {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
                 if let Some(outcome) = post_tool_use_outcome {
-                    if outcome.should_block {
-                        let message = outcome.feedback_message.unwrap_or_else(|| {
-                            "PostToolUse hook blocked the tool result".to_string()
-                        });
-                        let err = FunctionCallError::RespondToModel(message);
+                    let should_block = outcome.should_block;
+                    if let Some(feedback_message) = outcome.feedback_message {
+                        let replacement_response_ids = outcome.replacement_response_ids;
+                        if !should_block {
+                            result.result = Box::new(PostToolUseFeedbackOutput {
+                                original: result.result,
+                                model_visible: FunctionToolOutput::from_text(
+                                    feedback_message.clone(),
+                                    /*success*/ None,
+                                ),
+                            });
+                        }
+                        if !is_code_mode_nested {
+                            let session_id = invocation.session.session_id().to_string();
+                            let tool_use_id = result
+                                .post_tool_use_payload
+                                .as_ref()
+                                .map_or(result.call_id.as_str(), |payload| {
+                                    payload.tool_use_id.as_str()
+                                });
+                            invocation
+                                .session
+                                .services
+                                .code_mode_service
+                                .accept_post_tool_use_replacements(
+                                    &replacement_response_ids,
+                                    &session_id,
+                                    &invocation.turn.sub_id,
+                                    tool_use_id,
+                                )
+                                .await;
+                        }
+                        if should_block {
+                            let err = FunctionCallError::RespondToModel(feedback_message);
+                            dispatch_trace.record_failed(&err);
+                            return Err(err);
+                        }
+                    } else if should_block {
+                        let err = FunctionCallError::RespondToModel(
+                            "PostToolUse hook blocked the tool result".to_string(),
+                        );
                         dispatch_trace.record_failed(&err);
                         return Err(err);
-                    }
-                    if let Some(feedback_message) = outcome.feedback_message {
-                        result.result = Box::new(PostToolUseFeedbackOutput {
-                            original: result.result,
-                            model_visible: FunctionToolOutput::from_text(
-                                feedback_message,
-                                /*success*/ None,
-                            ),
-                        });
                     }
                 }
                 tool.on_tool_result_accepted(&invocation, result.result.as_ref());

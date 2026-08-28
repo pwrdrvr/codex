@@ -1743,6 +1743,27 @@ impl Session {
         self.refresh_hooks(config).await;
     }
 
+    pub(crate) async fn refresh_code_mode_reduction_config(&self, next_config: &Config) {
+        let reduction_config = {
+            let mut state = self.state.lock().await;
+            let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+            config.code_mode.max_output_tokens_ceiling =
+                next_config.code_mode.max_output_tokens_ceiling;
+            config.code_mode.output_reducer = next_config.code_mode.output_reducer.clone();
+            let config = Arc::new(config);
+            let reduction_config = config.code_mode.clone();
+            state.session_configuration.original_config_do_not_use = config;
+            reduction_config
+        };
+        self.services
+            .code_mode_service
+            .refresh_reduction_config(&reduction_config);
+    }
+
+    pub(crate) async fn refresh_dynamic_tools(&self, dynamic_tools: Vec<DynamicToolSpec>) {
+        self.state.lock().await.session_configuration.dynamic_tools = dynamic_tools;
+    }
+
     pub(crate) async fn refresh_hooks(&self, config: Arc<Config>) {
         let environments = self.services.turn_environments.snapshot().await;
         let hooks_config = build_hooks_config(
