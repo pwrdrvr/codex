@@ -19,6 +19,11 @@
           "const": "PostToolUse",
           "type": "string"
         },
+        "response_id": {
+          "default": null,
+          "description": "Opaque identity for acknowledging a model-visible replacement.",
+          "type": "string"
+        },
         "updatedMCPToolOutput": {
           "default": null
         }

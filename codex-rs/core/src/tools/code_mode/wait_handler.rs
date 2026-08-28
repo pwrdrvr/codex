@@ -192,12 +192,14 @@ impl CodeModeWaitHandler {
                     .code_mode_host_duration()
                     .unwrap_or_else(|| started_at.elapsed());
                 Ok(boxed_tool_output(handle_runtime_response(
-                    &step_context.settings.model_info,
+                    &exec,
+            &call_id,
+            &step_context.settings.model_info,
                     wait_response.into(),
                     args.max_tokens,
                     wall_time,
                     exec.turn.config.code_mode.experimental_show_cell_overhead,
-                )))
+                ).await))
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{WAIT_TOOL_NAME} expects JSON arguments"
