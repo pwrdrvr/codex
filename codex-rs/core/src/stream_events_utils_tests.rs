@@ -13,6 +13,7 @@ use crate::session::tests::make_session_and_context_with_auth_and_config_and_rx;
 use crate::session::tests::tool_registry_for_test_step;
 use crate::session::turn_context::TurnContext;
 use crate::tools::ToolRouter;
+use crate::tools::context::ToolCallSource;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
@@ -305,6 +306,7 @@ fn output_context(session: Arc<Session>, turn_context: Arc<TurnContext>) -> Hand
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime,
         cancellation_token: CancellationToken::new(),
+        parent_intent: None,
     }
 }
 
@@ -445,6 +447,60 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
         .await
         .expect("plan result after capture re-enabled");
     assert!(result.item.executed_tool_call_metadata().is_none());
+}
+
+#[tokio::test]
+async fn rejected_tool_call_discards_recorded_parent_intent() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
+    let router = Arc::new(ToolRouter::from_registry(
+        step_context.turn.as_ref(),
+        step_context.turn.model_info(),
+        registry,
+        hosted_specs,
+        &Default::default(),
+    ));
+    let step_context = step_context.with_tool_router_for_test(router);
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), Arc::clone(&step_context), tracker);
+    let call_id = "rejected-parent-intent";
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: "unsupported_tool".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+        encrypted_function_args: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut ctx = HandleOutputCtx {
+        sess: Arc::clone(&session),
+        step_context,
+        turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
+        tool_runtime,
+        cancellation_token: CancellationToken::new(),
+        parent_intent: Some(Arc::from("Use the rejected tool for this step.")),
+    };
+
+    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
+        .await
+        .expect("tool call should be queued");
+    let tool_output = output
+        .tool_future
+        .expect("tool future")
+        .await
+        .expect("unsupported tool should produce a failed tool output");
+    assert!(format!("{tool_output:?}").contains("unsupported_tool"));
+    assert_eq!(
+        session
+            .services
+            .code_mode_service
+            .take_parent_intent(call_id, &ToolCallSource::Direct),
+        None
+    );
 }
 
 #[tokio::test]

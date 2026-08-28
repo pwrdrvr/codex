@@ -85,6 +85,16 @@ impl CodeModeExecuteHandler {
             .map_err(FunctionCallError::RespondToModel)?;
         let cell_id = started_cell.cell_id.clone();
         tracing::Span::current().record("cell.id", trace_id(cell_id.as_str()));
+        // Recorded here rather than passed down, because a `wait` call resumes
+        // this cell without ever seeing the source that started it.
+        exec.session
+            .services
+            .code_mode_service
+            .record_cell_script(&cell_id, args.code.as_str());
+        exec.session
+            .services
+            .code_mode_service
+            .move_parent_intent_to_cell(&call_id, &cell_id);
         telemetry.cell_id = Some(cell_id.to_string());
         exec.session
             .services
@@ -147,6 +157,8 @@ impl CodeModeExecuteHandler {
             .code_mode_host_duration()
             .unwrap_or_else(|| started_at.elapsed());
         handle_runtime_response(
+            &exec,
+            &call_id,
             &step_context.settings.model_info,
             response,
             args.max_output_tokens,

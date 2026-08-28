@@ -48,6 +48,7 @@ use crate::request_processors::ThreadRequestProcessor;
 use crate::request_processors::ThreadResumeTarget;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
+use crate::request_processors::read_server_capabilities;
 use crate::request_processors::read_server_diagnostics;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
@@ -1117,6 +1118,9 @@ impl MessageProcessor {
                 .await;
             }
             ClientRequest::ServerDiagnostics { .. } => Ok(Some(read_server_diagnostics().into())),
+            ClientRequest::ServerCapabilitiesRead { .. } => {
+                Ok(Some(read_server_capabilities().into()))
+            }
             ClientRequest::ConfigRead { params, .. } => self
                 .config_processor
                 .read(params)

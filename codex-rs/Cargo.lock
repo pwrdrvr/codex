@@ -3419,6 +3419,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",

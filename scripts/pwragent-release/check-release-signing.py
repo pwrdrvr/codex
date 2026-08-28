@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-release.yml"
 CHECK_WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-release-check.yml"
 DEFAULT_CLIENT_PATH = ROOT / "codex-rs/login/src/auth/default_client.rs"
+ROLLOUT_RECORDER_PATH = ROOT / "codex-rs/rollout/src/recorder.rs"
+UNSIGNED_WORKFLOW_PATH = ROOT / ".github/workflows/pwragent-macos-unsigned.yml"
 WINDOWS_SIGNER_PATH = ROOT / "scripts/pwragent-release/sign-windows-binaries.ps1"
 WINDOWS_SIGNING_PREPARER_PATH = (
     ROOT / "scripts/pwragent-release/prepare-trusted-signing.ps1"
@@ -59,6 +61,8 @@ def job(workflow: str, name: str) -> str:
 workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 check_workflow = CHECK_WORKFLOW_PATH.read_text(encoding="utf-8")
 default_client = DEFAULT_CLIENT_PATH.read_text(encoding="utf-8")
+rollout_recorder = ROLLOUT_RECORDER_PATH.read_text(encoding="utf-8")
+unsigned_workflow = UNSIGNED_WORKFLOW_PATH.read_text(encoding="utf-8")
 windows_signer = WINDOWS_SIGNER_PATH.read_text(encoding="utf-8")
 windows_signing_preparer = WINDOWS_SIGNING_PREPARER_PATH.read_text(encoding="utf-8")
 windows_signing_verifier = WINDOWS_SIGNING_VERIFIER_PATH.read_text(encoding="utf-8")
@@ -96,6 +100,12 @@ for fragment in (
     "{}/{BUILD_VERSION}",
 ):
     require(default_client, fragment, "runtime version contract")
+for fragment in (
+    'option_env!("CODEX_BUILD_VERSION")',
+    'env!("CARGO_PKG_VERSION")',
+    "cli_version: BUILD_VERSION.to_string()",
+):
+    require(rollout_recorder, fragment, "rollout version contract")
 for fragment in (
     "github.event.action == 'labeled' || github.event.action == 'unlabeled'",
     "github.event.label.name != 'ci:release-signing'",
@@ -278,6 +288,22 @@ for fragment in (
 
 if "environment:" in check_workflow or "secrets." in check_workflow:
     fail("release signing check workflow must not enter an environment or read secrets")
+
+unsigned_workflow_code = "\n".join(
+    line for line in unsigned_workflow.splitlines() if not line.lstrip().startswith("#")
+)
+if "environment:" in unsigned_workflow_code or "secrets." in unsigned_workflow_code:
+    fail("the unsigned macOS workflow must not enter an environment or read secrets")
+for fragment in ("softprops/action-gh-release", "gh release", "contents: write"):
+    if fragment in unsigned_workflow_code:
+        fail(f"the unsigned macOS workflow must not publish ({fragment!r})")
+for fragment in (
+    "'ci:macos-unsigned'",
+    "name: unsigned-macos-aarch64",
+    "signed=no",
+    "id-token: none",
+):
+    require(unsigned_workflow, fragment, "unsigned macOS workflow")
 
 for fragment in (
     "Developer ID Application: PwrDrvr LLC (T44CNHC4UH)",
