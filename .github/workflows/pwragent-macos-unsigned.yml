@@ -1,0 +1,273 @@
+# Native unsigned macOS arm64 artifact for testing the PwrAgent Codex contract.
+#
+# This workflow is intentionally separate from the fail-closed signed release
+# pipeline. It has no secrets, enters no protected environment, and its output
+# is explicitly marked unsigned. Apply `ci:macos-unsigned` to a pull request or
+# dispatch the workflow after it is present on the repository default branch.
+
+name: Build unsigned macOS arm64
+
+on:
+  pull_request:
+    types:
+      - labeled
+      - reopened
+      - synchronize
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: none
+
+concurrency:
+  group: >-
+    pwragent-macos-unsigned-${{ github.ref }}-${{
+      github.event_name == 'pull_request'
+      && github.event.action == 'labeled'
+      && github.event.label.name != 'ci:macos-unsigned'
+      && github.run_id
+      || 'build'
+    }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build macos-aarch64 (unsigned)
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (contains(github.event.pull_request.labels.*.name, 'ci:macos-unsigned')
+      && (github.event.action == 'synchronize'
+      || github.event.action == 'reopened'
+      || github.event.label.name == 'ci:macos-unsigned'))
+    runs-on: macos-15
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: none
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off"
+      CARGO_TERM_COLOR: always
+      PLATFORM: macos-aarch64
+      TARGET: aarch64-apple-darwin
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve downstream version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_version="$(tr -d '[:space:]' \
+            < scripts/pwragent-release/upstream-version.txt)"
+          test -n "$upstream_version"
+          version="${upstream_version}-pwragent.dev.${GITHUB_RUN_NUMBER}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Restore Cargo cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: cargo-macos-aarch64-${{ hashFiles('codex-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-macos-aarch64-
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: aarch64-apple-darwin
+
+      - name: Build release binaries
+        working-directory: codex-rs
+        shell: bash
+        env:
+          CODEX_BUILD_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cargo build --locked --target "$TARGET" --release \
+            --bin codex \
+            --bin codex-app-server \
+            --bin codex-code-mode-host
+
+      - name: Save Cargo cache
+        if: always()
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: cargo-macos-aarch64-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Stage installable distribution
+        shell: bash
+        env:
+          CODEX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          release_dir="codex-rs/target/${TARGET}/release"
+          dest="stage/${PLATFORM}"
+          mkdir -p "$dest"
+          for binary in codex codex-app-server codex-code-mode-host; do
+            install -m 0755 "${release_dir}/${binary}" "${dest}/${binary}"
+          done
+          cp LICENSE NOTICE "$dest/"
+          cat > "${dest}/PWRAGENT-BUILD.txt" <<EOF
+          version=${CODEX_VERSION}
+          source_repository=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
+          source_commit=${GITHUB_SHA}
+          target=${TARGET}
+          platform=${PLATFORM}
+          signed=no
+          EOF
+
+      - name: Verify executable versions and reducer capability
+        shell: bash
+        env:
+          CODEX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          dest="stage/${PLATFORM}"
+          test "$("${dest}/codex" --version)" = "codex-cli ${CODEX_VERSION}"
+          test "$("${dest}/codex-app-server" --version)" = "codex-app-server ${CODEX_VERSION}"
+          test "$("${dest}/codex-code-mode-host" --version)" = "codex-code-mode-host ${CODEX_VERSION}"
+          python3 - "${dest}/codex-app-server" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import select
+          import subprocess
+          import sys
+          import tempfile
+
+          app_server = Path(sys.argv[1]).resolve()
+          with tempfile.TemporaryDirectory() as codex_home:
+              env = os.environ.copy()
+              env["CODEX_HOME"] = codex_home
+              process = subprocess.Popen(
+                  [str(app_server)],
+                  stdin=subprocess.PIPE,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.DEVNULL,
+                  text=True,
+                  env=env,
+              )
+
+              def send(message):
+                  process.stdin.write(json.dumps(message) + "\n")
+                  process.stdin.flush()
+
+              def response(request_id):
+                  while True:
+                      ready, _, _ = select.select([process.stdout], [], [], 30)
+                      if not ready:
+                          raise TimeoutError(f"app-server response {request_id} timed out")
+                      line = process.stdout.readline()
+                      if not line:
+                          raise RuntimeError("app-server exited before responding")
+                      message = json.loads(line)
+                      if message.get("id") == request_id:
+                          if "error" in message:
+                              raise RuntimeError(message["error"])
+                          return message["result"]
+
+              try:
+                  send({
+                      "method": "initialize",
+                      "id": 1,
+                      "params": {
+                          "clientInfo": {
+                              "name": "pwragent_ci",
+                              "title": "PwrAgent CI",
+                              "version": "1.0.0",
+                          }
+                      },
+                  })
+                  response(1)
+                  send({"method": "initialized", "params": {}})
+                  send({"method": "server/capabilities/read", "id": 2, "params": {}})
+                  capability = response(2)["codeModeOutputReducer"]
+                  assert capability["protocolVersion"] == 1, capability
+                  assert capability["continuationGuidanceVersion"] == 1, capability
+                  assert capability["intentContextVersion"] == 1, capability
+                  assert capability["reducerRequestField"] == "parent_intent", capability
+                  assert capability["postToolUseField"] == "parent_intent", capability
+                  actionable = capability["actionableState"]
+                  assert actionable["version"] == 1, capability
+                  assert actionable["reducerRequestField"] == "actionable_state", capability
+                  assert actionable["reducerResponseField"] == "actionable_state", capability
+                  assert actionable["modelOutputTag"] == "codex_actionable_state", capability
+                  assert capability["postToolUseNestedContextField"] == "is_code_mode_nested", capability
+                  grouping = capability["postToolUseGrouping"]
+                  assert grouping["versionField"] == "token_miser_grouping_version", capability
+                  assert grouping["version"] == 1, capability
+                  assert grouping["cellIdField"] == "code_mode_cell_id", capability
+                  assert grouping["toolCallIdField"] == "code_mode_tool_call_id", capability
+                  exact_output = capability["postToolUseExactOutput"]
+                  assert exact_output == {
+                      "version": 1,
+                      "versionField": "token_miser_exact_tool_response_version",
+                      "responseField": "token_miser_exact_tool_response",
+                  }, capability
+                  assert capability["supportsThreadResumeOverrides"] is True, capability
+                  assert capability["dynamicToolsResumeField"] == "dynamicTools", capability
+                  assert capability["acceptance"]["callbackVersion"] == 1, capability
+                  direct = capability["acceptance"]["directPostToolUse"]
+                  assert direct["hookResponseIdField"] == "hookSpecificOutput.response_id", capability
+                  assert direct["hookAcceptanceVersionField"] == "token_miser_acceptance_version", capability
+                  assert direct["hookAcceptanceVersion"] == 1, capability
+                  assert direct["sessionIdField"] == "session_id", capability
+                  assert direct["turnIdField"] == "turn_id", capability
+                  assert direct["toolUseIdField"] == "tool_use_id", capability
+              finally:
+                  process.terminate()
+                  process.wait(timeout=10)
+          PY
+
+      - name: Package unsigned artifact
+        shell: bash
+        env:
+          CODEX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tar -C "stage/${PLATFORM}" \
+            -czf "pwragent-codex-${CODEX_VERSION}-${PLATFORM}-unsigned.tar.gz" .
+
+      - name: Upload unsigned artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: unsigned-macos-aarch64
+          path: pwragent-codex-*-macos-aarch64-unsigned.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Summarize artifact
+        shell: bash
+        env:
+          CODEX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Unsigned macOS arm64 Codex"
+            echo
+            echo "Artifact: \`unsigned-macos-aarch64\`"
+            echo "Version: \`${CODEX_VERSION}\`"
+            echo
+            echo "After extracting on macOS, clear the download quarantine before testing:"
+            echo "\`xattr -dr com.apple.quarantine <extracted-directory>\`"
+            echo
+            echo "This artifact is neither signed nor notarized and must not be shipped."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -70,8 +70,10 @@ pub(crate) use stdin_approval::TerminalSandboxSource;
 
 pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
 pub(crate) const WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS: u64 = 10_000;
-// Minimum yield time for an empty `write_stdin`.
-pub(crate) const MIN_EMPTY_YIELD_TIME_MS: u64 = 5_000;
+// Keep empty background polls inside the current tool call long enough to
+// avoid tight parent-agent wake loops. Non-empty interactive writes retain the
+// lower general yield-time floor.
+pub(crate) const MIN_EMPTY_YIELD_TIME_MS: u64 = 30_000;
 pub(crate) const MAX_YIELD_TIME_MS: u64 = 30_000;
 pub(crate) const DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS: u64 = 300_000;
 pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;

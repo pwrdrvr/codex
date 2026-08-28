@@ -196,7 +196,11 @@ fn collect_resume_override_mismatches(
         ));
     }
 
-    if request.config.is_some() {
+    if request.config.as_ref().is_some_and(|config| {
+        !config
+            .iter()
+            .all(|(key, value)| is_code_mode_reduction_config_override(key, value))
+    }) {
         mismatch_details
             .push("config overrides were provided and ignored while running".to_string());
     }
@@ -210,6 +214,33 @@ fn collect_resume_override_mismatches(
         );
     }
     mismatch_details
+}
+
+fn is_code_mode_reduction_config_override(key: &str, value: &serde_json::Value) -> bool {
+    if key == "features.code_mode" {
+        return value.as_object().is_some_and(|table| {
+            table.keys().all(|field| {
+                matches!(
+                    field.as_str(),
+                    "max_output_tokens_ceiling" | "output_reducer"
+                )
+            })
+        });
+    }
+    matches!(
+        key,
+        "features.code_mode.max_output_tokens_ceiling" | "features.code_mode.output_reducer"
+    ) || key.starts_with("features.code_mode.output_reducer.")
+}
+
+fn has_code_mode_reduction_config_override(
+    config: Option<&HashMap<String, serde_json::Value>>,
+) -> bool {
+    config.is_some_and(|config| {
+        config
+            .iter()
+            .any(|(key, value)| is_code_mode_reduction_config_override(key, value))
+    })
 }
 
 fn merge_persisted_resume_metadata(
@@ -3601,6 +3632,14 @@ impl ThreadRequestProcessor {
                 .await;
             return Ok(());
         }
+        if let Some(dynamic_tools) = params.dynamic_tools.as_deref()
+            && let Err(error) = validate_dynamic_tools(dynamic_tools)
+        {
+            self.outgoing
+                .send_error(request_id, invalid_request(error))
+                .await;
+            return Ok(());
+        }
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
@@ -3643,6 +3682,7 @@ impl ThreadRequestProcessor {
             sandbox,
             permissions,
             config: mut request_overrides,
+            dynamic_tools,
             base_instructions,
             developer_instructions,
             personality,
@@ -3826,6 +3866,9 @@ impl ThreadRequestProcessor {
                 session_configured,
                 ..
             }) => {
+                if let Some(dynamic_tools) = dynamic_tools {
+                    codex_thread.refresh_dynamic_tools(dynamic_tools).await;
+                }
                 if let Err(err) = Self::set_app_server_client_info(
                     codex_thread.as_ref(),
                     app_server_client_name,
@@ -4104,13 +4147,32 @@ impl ThreadRequestProcessor {
         } else if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
             && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
         {
-            let source_thread = self
-                .read_stored_thread_for_resume(
-                    &params.thread_id,
-                    /*path*/ None,
-                    /*include_history*/ false,
-                )
-                .await?;
+            let existing_rollout_path = existing_thread.rollout_path();
+            // A newly started thread is loaded before its rollout exists. Permit
+            // that exact empty-history case to rejoin the live session so resume
+            // overrides can take effect before the first turn. Once a rollout or
+            // any conversation history exists, retain the normal stored-thread
+            // validation path.
+            let source_thread = match existing_rollout_path.as_ref() {
+                Some(path)
+                    if !tokio::fs::try_exists(path).await.map_err(|error| {
+                        internal_error(format!(
+                            "failed to inspect rollout path `{}`: {error}",
+                            path.display()
+                        ))
+                    })? && !existing_thread.has_conversation_history().await =>
+                {
+                    None
+                }
+                path => Some(
+                    self.read_stored_thread_for_resume(
+                        &params.thread_id,
+                        path,
+                        /*include_history*/ false,
+                    )
+                    .await?,
+                ),
+            };
             Some((existing_thread_id, existing_thread, source_thread))
         } else {
             let source_thread = self
@@ -4122,7 +4184,9 @@ impl ThreadRequestProcessor {
                 .await?;
             let existing_thread_id = source_thread.thread_id;
             match self.thread_manager.get_thread(existing_thread_id).await {
-                Ok(existing_thread) => Some((existing_thread_id, existing_thread, source_thread)),
+                Ok(existing_thread) => {
+                    Some((existing_thread_id, existing_thread, Some(source_thread)))
+                }
                 Err(_) => {
                     return Ok(RunningThreadResumeResult::NotRunning(Some(Box::new(
                         source_thread,
@@ -4132,12 +4196,15 @@ impl ThreadRequestProcessor {
         };
 
         if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
-            let paginated_resume =
-                matches!(source_thread.history_mode, ThreadHistoryMode::Paginated);
-            let existing_thread_rollout_path = existing_thread.rollout_path();
-            let active_path = existing_thread_rollout_path
+            let paginated_resume = source_thread
                 .as_ref()
-                .or(source_thread.rollout_path.as_ref());
+                .is_some_and(|thread| matches!(thread.history_mode, ThreadHistoryMode::Paginated));
+            let existing_thread_rollout_path = existing_thread.rollout_path();
+            let active_path = existing_thread_rollout_path.as_ref().or_else(|| {
+                source_thread
+                    .as_ref()
+                    .and_then(|thread| thread.rollout_path.as_ref())
+            });
             if let (Some(requested_path), Some(active_path)) = (params.path.as_ref(), active_path)
                 && !path_utils::paths_match_after_normalization(requested_path, active_path)
             {
@@ -4148,6 +4215,28 @@ impl ThreadRequestProcessor {
                 )));
             }
             let config_snapshot = existing_thread.config_snapshot().await;
+            if has_code_mode_reduction_config_override(params.config.as_ref()) {
+                if matches!(existing_thread.agent_status().await, AgentStatus::Running) {
+                    return Err(invalid_request(format!(
+                        "cannot refresh the Code Mode output reducer while thread {existing_thread_id} has an active turn"
+                    )));
+                }
+                let next_config = self
+                    .config_manager
+                    .load_for_cwd(
+                        params.config.clone(),
+                        ConfigOverrides::default(),
+                        Some(config_snapshot.cwd().to_path_buf()),
+                    )
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                existing_thread
+                    .refresh_code_mode_reduction_config(&next_config)
+                    .await;
+            }
+            if let Some(dynamic_tools) = params.dynamic_tools.clone() {
+                existing_thread.refresh_dynamic_tools(dynamic_tools).await;
+            }
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self
@@ -4208,12 +4297,13 @@ impl ThreadRequestProcessor {
                 )
                 .await;
             }
-            let needs_history =
-                !paginated_resume && (include_turns || params.initial_turns_page.is_some());
-            if needs_history {
-                let source_thread_id = source_thread.thread_id.to_string();
-                let source_rollout_path = source_thread.rollout_path.clone();
-                source_thread = self
+            let needs_history = source_thread.is_some()
+                && !paginated_resume
+                && (include_turns || params.initial_turns_page.is_some());
+            if needs_history && let Some(thread) = source_thread.as_mut() {
+                let source_thread_id = thread.thread_id.to_string();
+                let source_rollout_path = thread.rollout_path.clone();
+                *thread = self
                     .read_stored_thread_for_resume(
                         &source_thread_id,
                         source_rollout_path.as_ref(),
@@ -4227,8 +4317,8 @@ impl ThreadRequestProcessor {
                     .await
                     .map_err(thread_store_resume_read_error)?;
             }
-            let history_items = if needs_history {
-                source_thread
+            let history_items = match (needs_history, source_thread.as_mut()) {
+                (true, Some(thread)) => thread
                     .history
                     .take()
                     .map(|history| history.items)
@@ -4236,9 +4326,13 @@ impl ThreadRequestProcessor {
                         internal_error(format!(
                             "thread {existing_thread_id} did not include persisted history"
                         ))
-                    })?
-            } else {
-                Vec::new()
+                    })?,
+                (true, None) => {
+                    return Err(internal_error(format!(
+                        "thread {existing_thread_id} is missing its resume source"
+                    )));
+                }
+                (false, _) => Vec::new(),
             };
 
             let thread_state = self
@@ -4258,10 +4352,21 @@ impl ThreadRequestProcessor {
             )
             .await?;
 
-            let mut thread_summary = self.stored_thread_to_api_thread(
-                source_thread,
-                config_snapshot.model_provider_id.as_str(),
-                /*include_turns*/ false,
+            let mut thread_summary = source_thread.map_or_else(
+                || {
+                    build_thread_from_loaded_snapshot(
+                        existing_thread_id,
+                        &config_snapshot,
+                        existing_thread.as_ref(),
+                    )
+                },
+                |source_thread| {
+                    self.stored_thread_to_api_thread(
+                        source_thread,
+                        config_snapshot.model_provider_id.as_str(),
+                        /*include_turns*/ false,
+                    )
+                },
             );
             thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
             thread_summary.thread_source = config_snapshot.thread_source.clone().map(Into::into);

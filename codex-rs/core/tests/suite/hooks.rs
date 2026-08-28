@@ -6,8 +6,10 @@ use anyhow::Result;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_core::config::CodeModeOutputReducerConfig;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
+use codex_core::config::DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE;
 use codex_core::config::ThreadStoreConfig;
 use codex_features::Feature;
 use codex_history::RolloutItem;
@@ -21,6 +23,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -47,6 +50,7 @@ use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
+use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -69,6 +73,12 @@ use tempfile::TempDir;
 use tokio::sync::oneshot;
 use tokio::time::sleep;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
@@ -764,10 +774,35 @@ elif mode == "decision_block":
         "decision": "block",
         "reason": reason
     }}))
+elif mode == "decision_block_with_response_id":
+    print(json.dumps({{
+        "decision": "block",
+        "reason": reason,
+        "hookSpecificOutput": {{
+            "hookEventName": "PostToolUse",
+            "response_id": "direct-gate-1"
+        }}
+    }}))
 elif mode == "continue_false":
     print(json.dumps({{
         "continue": False,
         "stopReason": reason
+    }}))
+elif mode == "continue_false_with_response_id":
+    print(json.dumps({{
+        "continue": False,
+        "stopReason": reason,
+        "hookSpecificOutput": {{
+            "hookEventName": "PostToolUse",
+            "response_id": "direct-gate-1"
+        }}
+    }}))
+elif mode == "response_id_only":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PostToolUse",
+            "response_id": "unselected-gate-1"
+        }}
     }}))
 elif mode == "exit_2":
     sys.stderr.write(reason + "\n")
@@ -3918,6 +3953,8 @@ async fn assert_post_tool_use_blocks_code_mode_tool_result(
         marker.display()
     );
     let command_json = serde_json::to_string(&command).context("serialize post hook command")?;
+    let parent_intent = "Inspect the nested command output before deciding what to retain.";
+    let hidden_reasoning = "private nested reasoning must never reach hooks";
     let code = format!(
         r#"
 try {{
@@ -3933,6 +3970,16 @@ try {{
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
+                ev_assistant_message("msg-parent-intent", parent_intent),
+                ev_reasoning_item(
+                    "reason-parent-intent",
+                    &[hidden_reasoning],
+                    &[hidden_reasoning],
+                ),
+                ev_assistant_message(
+                    "msg-hidden-parent-intent",
+                    "<oai-mem-citation>hidden assistant markup</oai-mem-citation>",
+                ),
                 ev_custom_tool_call(&call_id, "exec", &code),
                 ev_completed("resp-1"),
             ]),
@@ -3983,6 +4030,21 @@ try {{
     let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs[0]["is_code_mode_nested"], true);
+    assert_eq!(hook_inputs[0]["token_miser_acceptance_version"], 1);
+    assert_eq!(hook_inputs[0]["token_miser_grouping_version"], 1);
+    assert_eq!(hook_inputs[0]["parent_intent"], parent_intent);
+    assert!(!hook_inputs[0].to_string().contains(hidden_reasoning));
+    assert!(
+        hook_inputs[0]["code_mode_cell_id"]
+            .as_str()
+            .is_some_and(|cell_id| !cell_id.is_empty())
+    );
+    assert!(
+        hook_inputs[0]["code_mode_tool_call_id"]
+            .as_str()
+            .is_some_and(|tool_call_id| !tool_call_id.is_empty())
+    );
     assert_eq!(
         hook_inputs[0]["tool_response"],
         Value::String("original-post-tool-result".to_string())
@@ -4004,6 +4066,101 @@ async fn post_tool_use_block_decision_rejects_code_mode_tool_promise() -> Result
 async fn post_tool_use_exit_two_rejects_code_mode_tool_promise() -> Result<()> {
     assert_post_tool_use_blocks_code_mode_tool_result("exit_2", "blocked nested result by exit two")
         .await
+}
+
+#[tokio::test]
+async fn blocked_terminal_code_mode_poll_does_not_retain_running_actionable_state() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_host_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-code-mode-terminal-poll";
+    let feedback = "blocked terminal poll result";
+    let code = r#"
+const session = await tools.exec_command({
+  cmd: "sleep 1; printf terminal-poll-complete",
+  shell: "/bin/sh",
+  login: false,
+  tty: false,
+  yield_time_ms: 250,
+});
+try {
+  await tools.write_stdin({
+    session_id: session.session_id,
+    chars: "",
+    yield_time_ms: 5000,
+  });
+} catch (error) {
+  text(JSON.stringify({ kind: "caught", error: String(error) }));
+}
+"#;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call(call_id, "exec", code),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "terminal poll block observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_pre_build_hook(move |home| {
+            write_post_tool_use_hook(home, Some("^Bash$"), "decision_block", feedback)
+                .expect("write blocking post tool use hook fixture");
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.enable(Feature::UnifiedExec);
+            config.code_mode.output_reducer = Some(CodeModeOutputReducerConfig {
+                descriptor_path: Path::new("unused-actionable-state-reducer.json").to_path_buf(),
+                min_trigger_bytes: usize::MAX,
+                max_request_bytes: 1024,
+                max_response_bytes: 1024,
+                timeout: Duration::from_secs(1),
+                connect_timeout: Duration::from_secs(1),
+                tool_description_guidance: DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+                    .to_string(),
+                continuation_guidance: None,
+            });
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_permission_profile(
+        "complete a background command from code mode",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output = code_mode_custom_tool_output_text(&requests[1].custom_tool_call_output(call_id));
+    assert!(output.contains(feedback), "unexpected output: {output}");
+    assert!(
+        output.contains(r#""state":"completed""#),
+        "unexpected output: {output}"
+    );
+    assert!(
+        output.contains(r#""exit_code":0"#),
+        "unexpected output: {output}"
+    );
+    assert!(
+        !output.contains(r#""state":"running""#),
+        "unexpected output: {output}"
+    );
+    assert!(!output.contains(r#""required_follow_up":{"operation":"write_stdin""#));
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -4759,11 +4916,33 @@ async fn post_tool_use_records_additional_context_for_exec_command() -> Result<(
     let call_id = "posttooluse-exec-command";
     let command = "printf post-tool-output".to_string();
     let args = serde_json::json!({ "cmd": command });
+    let no_intent_call_id = "posttooluse-exec-command-without-intent";
+    let no_intent_command = "printf no-intent-output".to_string();
+    let no_intent_args = serde_json::json!({ "cmd": no_intent_command });
+    let parent_intent = "Check the command output for the requested marker.";
+    let hidden_reasoning = "private direct reasoning must never reach hooks";
     let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
+                ev_reasoning_item(
+                    "reason-without-parent-intent",
+                    &[hidden_reasoning],
+                    &[hidden_reasoning],
+                ),
+                core_test_support::responses::ev_function_call(
+                    no_intent_call_id,
+                    "exec_command",
+                    &serde_json::to_string(&no_intent_args)?,
+                ),
+                ev_assistant_message("msg-parent-intent", parent_intent),
+                ev_reasoning_item(
+                    "reason-parent-intent",
+                    &[hidden_reasoning],
+                    &[hidden_reasoning],
+                ),
+                ev_assistant_message("msg-empty-parent-intent", ""),
                 core_test_support::responses::ev_function_call(
                     call_id,
                     "exec_command",
@@ -4809,18 +4988,45 @@ async fn post_tool_use_records_additional_context_for_exec_command() -> Result<(
         output.contains("post-tool-output"),
         "shell command output should still reach the model",
     );
+    let no_intent_output_item = requests[1].function_call_output(no_intent_call_id);
+    let no_intent_output = no_intent_output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("no-intent shell command output string");
+    assert!(no_intent_output.contains("no-intent-output"));
 
     let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(hook_inputs[0]["hook_event_name"], "PostToolUse");
-    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
-    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
-    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs.len(), 2);
+    let hook_input = hook_inputs
+        .iter()
+        .find(|input| input["tool_use_id"] == call_id)
+        .expect("PostToolUse input with parent intent");
+    let no_intent_hook_input = hook_inputs
+        .iter()
+        .find(|input| input["tool_use_id"] == no_intent_call_id)
+        .expect("PostToolUse input without parent intent");
+    assert_eq!(hook_input["hook_event_name"], "PostToolUse");
+    assert_eq!(hook_input["tool_name"], "Bash");
+    assert_eq!(hook_input["tool_input"]["command"], command);
+    assert_eq!(hook_input["is_code_mode_nested"], false);
+    assert_eq!(hook_input["token_miser_acceptance_version"], 1);
+    assert_eq!(hook_input["token_miser_grouping_version"], 1);
+    assert_eq!(hook_input["parent_intent"], parent_intent);
     assert_eq!(
-        hook_inputs[0]["tool_response"],
+        hook_input.get("token_miser_exact_tool_response_version"),
+        None
+    );
+    assert_eq!(hook_input.get("token_miser_exact_tool_response"), None);
+    assert!(!hook_input.to_string().contains(hidden_reasoning));
+    assert_eq!(hook_input.get("code_mode_cell_id"), None);
+    assert_eq!(hook_input.get("code_mode_tool_call_id"), None);
+    assert_eq!(
+        hook_input["tool_response"],
         Value::String("post-tool-output".to_string())
     );
-    let transcript_path = hook_inputs[0]["transcript_path"]
+    assert_eq!(no_intent_hook_input.get("parent_intent"), None);
+    assert!(!no_intent_hook_input.to_string().contains(hidden_reasoning));
+    let transcript_path = hook_input["transcript_path"]
         .as_str()
         .expect("post tool use hook transcript_path");
     assert!(
@@ -4832,10 +5038,90 @@ async fn post_tool_use_records_additional_context_for_exec_command() -> Result<(
         "post tool use hook transcript_path should be materialized on disk",
     );
     assert!(
-        hook_inputs[0]["turn_id"]
+        hook_input["turn_id"]
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_tool_use_exposes_full_exact_response_only_with_output_reducer() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-exact-response";
+    let exact_output = format!("START-{}-END", "x".repeat(/*n*/ 4_096));
+    let command = "python3 -c \"import sys; sys.stdout.write('START-' + 'x' * 4096 + '-END')\"";
+    let args = serde_json::json!({ "cmd": command });
+    let _responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "exact post hook output observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let descriptor_dir = TempDir::new()?;
+    let descriptor_path = descriptor_dir.path().join("reducer.json");
+    fs::write(
+        &descriptor_path,
+        serde_json::json!({
+            "version": 1,
+            "url": "http://127.0.0.1:9/reduce",
+            "acceptance_url": "http://127.0.0.1:9/accept",
+            "token": "exact-output-token",
+        })
+        .to_string(),
+    )?;
+    let descriptor_path_for_config = descriptor_path.clone();
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.truncation_policy = TruncationPolicyConfig::bytes(/*limit*/ 256);
+        })
+        .with_pre_build_hook(|home| {
+            write_post_tool_use_hook(home, Some("^Bash$"), "context", "exact output observed")
+                .expect("write exact output post tool use hook fixture");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.code_mode.output_reducer = Some(CodeModeOutputReducerConfig {
+                descriptor_path: descriptor_path_for_config,
+                min_trigger_bytes: 1,
+                max_request_bytes: 1024 * 1024,
+                max_response_bytes: 64 * 1024,
+                timeout: Duration::from_secs(5),
+                connect_timeout: Duration::from_secs(2),
+                tool_description_guidance: DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+                    .to_string(),
+                continuation_guidance: None,
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the command with exact post hook output")
+        .await?;
+
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    let hook_input = &hook_inputs[0];
+    let tool_response = hook_input["tool_response"]
+        .as_str()
+        .expect("legacy tool_response should remain a string");
+    assert_ne!(tool_response, exact_output);
+    assert!(tool_response.contains("chars truncated"));
+    assert_eq!(hook_input["token_miser_exact_tool_response_version"], 1);
+    assert_eq!(hook_input["token_miser_exact_tool_response"], exact_output);
 
     Ok(())
 }
@@ -4956,6 +5242,178 @@ async fn post_tool_use_continue_false_replaces_exec_command_output_with_stop_rea
     assert_eq!(
         hook_inputs[0]["tool_response"],
         Value::String("stop-output".to_string())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_tool_use_selected_replacement_is_acknowledged_with_direct_identity() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = start_mock_server().await;
+    let acceptance_server = MockServer::start().await;
+    let descriptor_dir = TempDir::new()?;
+    let descriptor_path = descriptor_dir.path().join("reducer.json");
+    let acceptance_path = "/v1/accept";
+    let token = "direct-hook-token";
+    fs::write(
+        &descriptor_path,
+        serde_json::json!({
+            "version": 1,
+            "url": format!("{}/unused-reduce", acceptance_server.uri()),
+            "acceptance_url": format!("{}{acceptance_path}", acceptance_server.uri()),
+            "token": token,
+        })
+        .to_string(),
+    )?;
+    Mock::given(method("POST"))
+        .and(path(acceptance_path))
+        .and(header("authorization", format!("Bearer {token}").as_str()))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&acceptance_server)
+        .await;
+
+    let call_id = "posttooluse-direct-accept";
+    let args = serde_json::json!({ "command": "printf original-output" });
+    let responses = mount_sse_sequence(
+        &responses_server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "accepted"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let descriptor_path_for_config = descriptor_path.clone();
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_post_tool_use_hook(
+                home,
+                Some("^Bash$"),
+                "decision_block_with_response_id",
+                "selected replacement",
+            )
+            .expect("write post tool use hook");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.code_mode.output_reducer = Some(CodeModeOutputReducerConfig {
+                descriptor_path: descriptor_path_for_config,
+                min_trigger_bytes: 1,
+                max_request_bytes: 1024 * 1024,
+                max_response_bytes: 64 * 1024,
+                timeout: Duration::from_secs(5),
+                connect_timeout: Duration::from_secs(2),
+                tool_description_guidance: DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+                    .to_string(),
+                continuation_guidance: None,
+            });
+        });
+    let test = builder.build(&responses_server).await?;
+    test.submit_turn("run direct replacement").await?;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests[1].function_call_output(call_id)["output"],
+        "selected replacement"
+    );
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    let callbacks = acceptance_server
+        .received_requests()
+        .await
+        .context("read acceptance requests")?;
+    assert_eq!(callbacks.len(), 1);
+    assert_eq!(
+        callbacks[0].body_json::<Value>()?,
+        serde_json::json!({
+            "version": 1,
+            "response_id": "direct-gate-1",
+            "session_id": hook_inputs[0]["session_id"],
+            "turn_id": hook_inputs[0]["turn_id"],
+            "tool_use_id": call_id,
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_tool_use_unselected_response_id_keeps_original_without_acceptance() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = start_mock_server().await;
+    let acceptance_server = MockServer::start().await;
+    let descriptor_dir = TempDir::new()?;
+    let descriptor_path = descriptor_dir.path().join("reducer.json");
+    fs::write(
+        &descriptor_path,
+        serde_json::json!({
+            "version": 1,
+            "url": format!("{}/unused-reduce", acceptance_server.uri()),
+            "acceptance_url": format!("{}/v1/accept", acceptance_server.uri()),
+            "token": "direct-hook-token",
+        })
+        .to_string(),
+    )?;
+    let call_id = "posttooluse-direct-unselected";
+    let args = serde_json::json!({ "command": "printf original-output" });
+    let responses = mount_sse_sequence(
+        &responses_server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "original observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let descriptor_path_for_config = descriptor_path.clone();
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_post_tool_use_hook(home, Some("^Bash$"), "response_id_only", "unused")
+                .expect("write post tool use hook");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.code_mode.output_reducer = Some(CodeModeOutputReducerConfig {
+                descriptor_path: descriptor_path_for_config,
+                min_trigger_bytes: 1,
+                max_request_bytes: 1024 * 1024,
+                max_response_bytes: 64 * 1024,
+                timeout: Duration::from_secs(5),
+                connect_timeout: Duration::from_secs(2),
+                tool_description_guidance: DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE
+                    .to_string(),
+                continuation_guidance: None,
+            });
+        });
+    let test = builder.build(&responses_server).await?;
+    test.submit_turn("run unselected direct output").await?;
+
+    let requests = responses.requests();
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item["output"].as_str().expect("shell output");
+    assert!(output.contains("original-output"));
+    assert!(
+        acceptance_server
+            .received_requests()
+            .await
+            .context("read acceptance requests")?
+            .is_empty()
     );
 
     Ok(())

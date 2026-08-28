@@ -48,6 +48,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_rollout::state_db;
 use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
+use codex_utils_output_truncation::formatted_truncate_text;
 use serde_json::Value;
 use tracing::instrument;
 
@@ -58,7 +59,9 @@ use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
+use crate::tools::context::ToolCallSource;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::turn_metadata::McpTurnMetadataContext;
 
@@ -278,12 +281,31 @@ pub(crate) async fn run_permission_request_hooks(
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    tool_use_id: String,
-    tool_name: String,
-    matcher_aliases: Vec<String>,
-    tool_input: Value,
-    tool_response: Value,
+    payload: PostToolUsePayload,
+    source: &ToolCallSource,
+    parent_intent: Option<String>,
 ) -> PostToolUseOutcome {
+    let (code_mode_cell_id, code_mode_tool_call_id) = match source {
+        ToolCallSource::CodeMode {
+            cell_id,
+            runtime_tool_call_id,
+        } => (Some(cell_id.clone()), Some(runtime_tool_call_id.clone())),
+        ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => (None, None),
+    };
+    let matcher_aliases = payload.tool_name.matcher_aliases().to_vec();
+    let exact_tool_response = turn_context
+        .config
+        .code_mode
+        .output_reducer
+        .is_some()
+        .then(|| payload.tool_response.clone());
+    let tool_response = match payload.tool_response {
+        Value::String(response) => Value::String(formatted_truncate_text(
+            &response,
+            turn_context.model_info.truncation_policy.into(),
+        )),
+        response => response,
+    };
     let request = PostToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -293,11 +315,16 @@ pub(crate) async fn run_post_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info().slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name,
+        tool_name: payload.tool_name.name().to_string(),
         matcher_aliases,
-        tool_use_id,
-        tool_input,
+        tool_use_id: payload.tool_use_id,
+        tool_input: payload.tool_input,
         tool_response,
+        exact_tool_response,
+        is_code_mode_nested: code_mode_cell_id.is_some(),
+        code_mode_cell_id,
+        code_mode_tool_call_id,
+        parent_intent,
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_post_tool_use(&request);

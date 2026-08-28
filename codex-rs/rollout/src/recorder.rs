@@ -74,6 +74,11 @@ use codex_protocol::protocol::ThreadSource;
 use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
 
+const BUILD_VERSION: &str = match option_env!("CODEX_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 /// Writes canonical session rollout items to JSONL.
 ///
 /// Rollouts are recorded as JSONL and can be inspected with tools such as:
@@ -881,7 +886,7 @@ impl RolloutRecorder {
                     timestamp,
                     cwd: cwd.clone(),
                     originator,
-                    cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                    cli_version: BUILD_VERSION.to_string(),
                     agent_nickname: source.get_nickname(),
                     agent_role: source.get_agent_role(),
                     agent_path: source.get_agent_path().map(Into::into),

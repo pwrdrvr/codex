@@ -4,6 +4,7 @@ mod approved_command_prefix_saved;
 mod apps_instructions;
 mod available_plugins_instructions;
 mod base_instructions;
+mod code_mode_output;
 mod compaction_summary;
 mod contextual_user_message;
 mod current_time_reminder;
@@ -51,6 +52,13 @@ pub(crate) use approved_command_prefix_saved::ApprovedCommandPrefixSaved;
 pub(crate) use apps_instructions::AppsInstructions;
 pub(crate) use available_plugins_instructions::AvailablePluginsInstructions;
 pub(crate) use base_instructions::BaseInstructionsFragment;
+#[cfg(test)]
+pub(crate) use code_mode_output::CODE_MODE_OUTPUT_REPLACEMENT_FOOTER;
+#[cfg(test)]
+pub(crate) use code_mode_output::CODE_MODE_OUTPUT_REPLACEMENT_HEADER;
+pub(crate) use code_mode_output::CodeModeActionableStateFragment;
+pub(crate) use code_mode_output::CodeModeOutputReductionGuidance;
+pub(crate) use code_mode_output::CodeModeOutputReplacementFence;
 pub(crate) use codex_context_fragments::AdditionalContextDeveloperFragment;
 pub(crate) use codex_context_fragments::AdditionalContextUserFragment;
 pub use codex_context_fragments::ContextualUserFragment;

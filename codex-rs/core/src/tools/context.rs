@@ -401,9 +401,14 @@ impl ToolOutput for ExecCommandToolOutput {
             return None;
         }
 
-        Some(JsonValue::String(
-            self.truncated_output_with_policy(self.model_output_policy()),
-        ))
+        let mut output = String::from_utf8_lossy(&self.raw_output).into_owned();
+        if let Some(omitted_bytes) = self.output_omitted_bytes {
+            let marker = format_output_omission_marker(omitted_bytes.get());
+            if !output.contains(&marker) {
+                output = format!("{marker}\n{output}");
+            }
+        }
+        Some(JsonValue::String(output))
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {

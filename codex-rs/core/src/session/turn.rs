@@ -2273,6 +2273,7 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.mode() == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
+    let mut latest_parent_intent = None;
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
     let mut active_item_is_streaming_to_client = false;
@@ -2324,6 +2325,10 @@ async fn try_run_sampling_request(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(mut item) => {
                 assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
+                let completed_assistant_message =
+                    matches!(&item, ResponseItem::Message { role, .. } if role == "assistant");
+                let completed_parent_intent =
+                    crate::parent_intent::from_response_item(&item, plan_mode);
                 if analytics_tool_call_ids.len() < MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE {
                     let call_id = match &item {
                         ResponseItem::FunctionCall { call_id, .. }
@@ -2377,6 +2382,11 @@ async fn try_run_sampling_request(
                     )
                     .await
                 {
+                    if completed_assistant_message
+                        && let Some(completed_parent_intent) = completed_parent_intent
+                    {
+                        latest_parent_intent = Some(completed_parent_intent);
+                    }
                     continue;
                 }
 
@@ -2386,6 +2396,7 @@ async fn try_run_sampling_request(
                     turn_store: Arc::clone(&turn_store),
                     tool_runtime: tool_runtime.clone(),
                     cancellation_token: cancellation_token.child_token(),
+                    parent_intent: latest_parent_intent.clone(),
                 };
 
                 let preempt_for_mailbox_mail = match &item {
@@ -2423,6 +2434,11 @@ async fn try_run_sampling_request(
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
+                }
+                if completed_assistant_message
+                    && let Some(completed_parent_intent) = completed_parent_intent
+                {
+                    latest_parent_intent = Some(completed_parent_intent);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
                 // todo: remove before stabilizing multi-agent v2

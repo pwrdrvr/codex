@@ -7,9 +7,18 @@ use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CodeModeActionableStateCapability;
+use codex_app_server_protocol::CodeModeOutputReducerAcceptanceCapability;
+use codex_app_server_protocol::CodeModeOutputReducerCapability;
+use codex_app_server_protocol::CodeModeOutputReducerModelGuidanceCapability;
+use codex_app_server_protocol::CodeModePostToolUseExactOutputCapability;
+use codex_app_server_protocol::CodeModePostToolUseGroupingCapability;
+use codex_app_server_protocol::DirectPostToolUseAcceptanceCapability;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerCapabilitiesReadParams;
+use codex_app_server_protocol::ServerCapabilitiesReadResponse;
 use codex_app_server_protocol::ServerDiagnosticsGauge;
 use codex_app_server_protocol::ServerDiagnosticsParams;
 use codex_app_server_protocol::ServerDiagnosticsResponse;
@@ -20,6 +29,95 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
+
+#[tokio::test]
+async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(READ_TIMEOUT)
+        .await?;
+
+    let capabilities: ServerCapabilitiesReadResponse = app_server
+        .request(|request_id| ClientRequest::ServerCapabilitiesRead {
+            request_id,
+            params: ServerCapabilitiesReadParams::default(),
+        })
+        .await?;
+
+    let capabilities_json = serde_json::to_value(&capabilities)?;
+    assert_eq!(
+        capabilities_json["codeModeOutputReducer"]["modelGuidance"],
+        json!({
+            "version": 1,
+            "toolDescriptionConfigKey":
+                "features.code_mode.output_reducer.tool_description_guidance",
+            "continuationConfigKey":
+                "features.code_mode.output_reducer.continuation_guidance",
+            "modelVisibleOverheadRequestField": "model_visible_overhead_characters",
+        })
+    );
+
+    assert_eq!(
+        capabilities,
+        ServerCapabilitiesReadResponse {
+            code_mode_output_reducer: CodeModeOutputReducerCapability {
+                protocol_version: 1,
+                continuation_guidance_version: 1,
+                intent_context_version: 1,
+                reducer_request_field: "parent_intent".to_string(),
+                post_tool_use_field: "parent_intent".to_string(),
+                model_guidance: CodeModeOutputReducerModelGuidanceCapability {
+                    version: 1,
+                    tool_description_config_key:
+                        "features.code_mode.output_reducer.tool_description_guidance".to_string(),
+                    continuation_config_key:
+                        "features.code_mode.output_reducer.continuation_guidance".to_string(),
+                    model_visible_overhead_request_field: "model_visible_overhead_characters"
+                        .to_string(),
+                },
+                actionable_state: CodeModeActionableStateCapability {
+                    version: 1,
+                    reducer_request_field: "actionable_state".to_string(),
+                    reducer_response_field: "actionable_state".to_string(),
+                    model_output_tag: "codex_actionable_state".to_string(),
+                },
+                config_key: "features.code_mode.output_reducer".to_string(),
+                max_output_tokens_ceiling_config_key:
+                    "features.code_mode.max_output_tokens_ceiling".to_string(),
+                post_tool_use_nested_context_field: "is_code_mode_nested".to_string(),
+                post_tool_use_grouping: CodeModePostToolUseGroupingCapability {
+                    version_field: "token_miser_grouping_version".to_string(),
+                    version: 1,
+                    cell_id_field: "code_mode_cell_id".to_string(),
+                    tool_call_id_field: "code_mode_tool_call_id".to_string(),
+                },
+                post_tool_use_exact_output: CodeModePostToolUseExactOutputCapability {
+                    version: 1,
+                    version_field: "token_miser_exact_tool_response_version".to_string(),
+                    response_field: "token_miser_exact_tool_response".to_string(),
+                },
+                supports_thread_resume_overrides: true,
+                dynamic_tools_resume_field: "dynamicTools".to_string(),
+                acceptance: CodeModeOutputReducerAcceptanceCapability {
+                    descriptor_url_field: "acceptance_url".to_string(),
+                    response_id_field: "response_id".to_string(),
+                    callback_version: 1,
+                    direct_post_tool_use: DirectPostToolUseAcceptanceCapability {
+                        hook_response_id_field: "hookSpecificOutput.response_id".to_string(),
+                        hook_acceptance_version_field: "token_miser_acceptance_version".to_string(),
+                        hook_acceptance_version: 1,
+                        session_id_field: "session_id".to_string(),
+                        turn_id_field: "turn_id".to_string(),
+                        tool_use_id_field: "tool_use_id".to_string(),
+                    },
+                },
+            },
+        }
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn server_diagnostics_exposes_process_and_registered_thread_gauge() -> Result<()> {

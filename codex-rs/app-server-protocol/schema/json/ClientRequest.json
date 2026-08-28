@@ -3874,6 +3874,9 @@
       ],
       "type": "object"
     },
+    "ServerCapabilitiesReadParams": {
+      "type": "object"
+    },
     "SessionMigration": {
       "properties": {
         "cwd": {
@@ -5719,6 +5722,31 @@
         "params"
       ],
       "title": "InitializeRequest",
+      "type": "object"
+    },
+    {
+      "description": "Read stable app-server extension capabilities implemented by this binary.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "server/capabilities/read"
+          ],
+          "title": "Server/capabilities/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ServerCapabilitiesReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Server/capabilities/readRequest",
       "type": "object"
     },
     {
