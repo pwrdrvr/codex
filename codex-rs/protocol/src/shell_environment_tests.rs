@@ -26,6 +26,10 @@ fn non_inheritable_environment_is_removed_after_policy_overrides() {
             "codex_exec_server_noise_auth_token".to_string(),
             "inherited-noise-token".to_string(),
         ),
+        (
+            "pwragent_token_miser_bridge_descriptor_path".to_string(),
+            "/run/pwragent/token-miser-bridge-v1.json".to_string(),
+        ),
     ];
     let policy = ShellEnvironmentPolicy {
         inherit: ShellEnvironmentPolicyInherit::All,
@@ -40,6 +44,10 @@ fn non_inheritable_environment_is_removed_after_policy_overrides() {
             (
                 "Codex_Exec_Server_Noise_Auth_Token".to_string(),
                 "configured-noise-token".to_string(),
+            ),
+            (
+                "PwrAgent_Token_Miser_Bridge_Descriptor_Path".to_string(),
+                "/tmp/untrusted-token-miser-bridge-v1.json".to_string(),
             ),
         ]),
         ..Default::default()

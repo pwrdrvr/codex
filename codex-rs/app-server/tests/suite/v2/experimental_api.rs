@@ -45,6 +45,7 @@ async fn mock_experimental_method_requires_experimental_api_capability() -> Resu
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         )
         .await?;
@@ -82,6 +83,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         )
         .await?;
@@ -139,6 +141,7 @@ async fn thread_memory_mode_set_requires_experimental_api_capability() -> Result
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         )
         .await?;
@@ -181,6 +184,7 @@ async fn settings_update_requires_experimental_api_capability(method: &str) -> R
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         )
         .await?;
@@ -220,6 +224,7 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         )
         .await?;
@@ -280,6 +285,7 @@ async fn thread_start_mock_field_requires_experimental_api_capability() -> Resul
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         )
         .await?;
@@ -323,6 +329,7 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         )
         .await?;
@@ -365,6 +372,7 @@ async fn thread_start_granular_approval_policy_requires_experimental_api_capabil
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         )
         .await?;

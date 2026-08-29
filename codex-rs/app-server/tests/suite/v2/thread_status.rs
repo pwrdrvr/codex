@@ -153,6 +153,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
                 opt_out_notification_methods: Some(vec!["thread/status/changed".to_string()]),
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         ),
     )

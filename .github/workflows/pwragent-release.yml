@@ -642,9 +642,15 @@ jobs:
       - windows-sign
     runs-on: ubuntu-24.04
     permissions:
+      attestations: write
       contents: read
-      id-token: none
+      id-token: write
     steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Download release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -660,6 +666,49 @@ jobs:
           mapfile -t assets < <(find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort)
           test "${#assets[@]}" -eq 5
           sha256sum "${assets[@]}" > SHA256SUMS
+
+      - name: Generate machine-readable update manifest
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag="pwragent-v${VERSION}"
+          if [[ "$GITHUB_REF" == refs/tags/pwragent-v* ]]; then
+            test "$GITHUB_REF_NAME" = "$release_tag"
+          fi
+          python3 scripts/pwragent-release/generate-update-manifest.py manifest \
+            --dist dist \
+            --version "$VERSION" \
+            --release-tag "$release_tag" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-commit "$GITHUB_SHA"
+
+      - name: Sign release assets and manifest with Sigstore provenance
+        id: attest
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          create-storage-record: false
+          subject-path: |
+            dist/pwragent-codex-*.tar.gz
+            dist/pwragent-codex-*.zip
+            dist/SHA256SUMS
+            dist/pwragent-codex-update-v1.json
+
+      - name: Stage Sigstore bundle and publication-complete marker
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE_PATH" dist/pwragent-codex-update-v1.json.sigstore.json
+          python3 scripts/pwragent-release/generate-update-manifest.py marker \
+            --dist dist \
+            --version "$VERSION" \
+            --release-tag "pwragent-v${VERSION}" \
+            --source-commit "$GITHUB_SHA"
+          test -f dist/pwragent-codex-publication-complete-v1.json
 
       - name: Upload signed release candidate
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -694,12 +743,41 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::Release $RELEASE_TAG already exists; downstream assets are immutable." >&2
-            exit 1
-          fi
-          gh release create "$RELEASE_TAG" dist/* \
+          release_title="PwrAgent Codex ${VERSION}"
+          release_notes="Downstream Codex binaries for PwrDrvr products. Source commit: ${GITHUB_SHA}. macOS and Windows executables are signed by PwrDrvr LLC."
+          if existing_release="$(gh release view "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
+            --json body,isDraft,isPrerelease,name 2>/dev/null)"; then
+            if jq -e \
+              --arg title "$release_title" \
+              --arg notes "$release_notes" \
+              '.isDraft == true and .isPrerelease == true and .name == $title and .body == $notes' \
+              <<<"$existing_release" >/dev/null; then
+              echo "Removing matching incomplete draft release from an earlier attempt."
+              gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes
+            else
+              echo "::error::Release $RELEASE_TAG already exists; downstream assets are immutable." >&2
+              exit 1
+            fi
+          fi
+          marker="dist/pwragent-codex-publication-complete-v1.json"
+          test -f "$marker"
+          mapfile -t assets < <(find dist -maxdepth 1 -type f ! -name "$(basename "$marker")" -print | sort)
+          draft_created=false
+          cleanup_draft() {
+            if [[ "$draft_created" == true ]]; then
+              gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes || true
+            fi
+          }
+          trap cleanup_draft ERR
+          gh release create "$RELEASE_TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
             --prerelease \
-            --title "PwrAgent Codex ${VERSION}" \
-            --notes "Downstream Codex binaries for PwrDrvr products. Source commit: ${GITHUB_SHA}. macOS and Windows executables are signed by PwrDrvr LLC."
+            --title "$release_title" \
+            --notes "$release_notes"
+          draft_created=true
+          gh release upload "$RELEASE_TAG" "$marker" --repo "$GITHUB_REPOSITORY"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          draft_created=false
+          trap - ERR

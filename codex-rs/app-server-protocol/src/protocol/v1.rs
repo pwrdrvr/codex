@@ -63,6 +63,17 @@ pub struct InitializeCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub extensions: Option<HashMap<String, serde_json::Value>>,
+    /// Authenticate the narrowly scoped PwrAgent-managed Token Miser bridge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub pwrdrvr_token_miser: Option<PwrdrvrTokenMiserInitializeCapability>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PwrdrvrTokenMiserInitializeCapability {
+    pub version: u32,
+    pub activation_nonce: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

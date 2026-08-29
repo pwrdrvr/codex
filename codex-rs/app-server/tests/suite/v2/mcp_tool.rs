@@ -270,6 +270,7 @@ async fn mcp_server_tool_call_forwards_only_server_extensions() -> Result<()> {
                     json!({}),
                 ),
             ])),
+            pwrdrvr_token_miser: None,
         }),
     )
     .await?;
@@ -362,6 +363,7 @@ async fn model_mcp_tool_call_uses_session_client_extensions() -> Result<()> {
                 "io.modelcontextprotocol/ui".to_string(),
                 app_ui.clone(),
             )])),
+            pwrdrvr_token_miser: None,
         }),
     )
     .await?;

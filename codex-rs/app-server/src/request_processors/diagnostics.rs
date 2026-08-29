@@ -5,6 +5,7 @@ use codex_app_server_protocol::CodeModeOutputReducerModelGuidanceCapability;
 use codex_app_server_protocol::CodeModePostToolUseExactOutputCapability;
 use codex_app_server_protocol::CodeModePostToolUseGroupingCapability;
 use codex_app_server_protocol::DirectPostToolUseAcceptanceCapability;
+use codex_app_server_protocol::PwrdrvrTokenMiserCapability;
 use codex_app_server_protocol::ServerCapabilitiesReadResponse;
 use codex_app_server_protocol::ServerDiagnosticsGauge;
 use codex_app_server_protocol::ServerDiagnosticsProcess;
@@ -83,6 +84,16 @@ pub(crate) fn read_server_capabilities() -> ServerCapabilitiesReadResponse {
                     tool_use_id_field: "tool_use_id".to_string(),
                 },
             },
+        },
+        pwrdrvr_token_miser: PwrdrvrTokenMiserCapability {
+            version: 1,
+            identity: "pwrdrvr.pwragent.token-miser".to_string(),
+            initialize_capability_field: "pwrdrvrTokenMiser".to_string(),
+            thread_start_field: "pwrdrvrTokenMiser".to_string(),
+            thread_resume_field: "pwrdrvrTokenMiser".to_string(),
+            descriptor_environment_variable: "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH"
+                .to_string(),
+            descriptor_version: 1,
         },
     }
 }

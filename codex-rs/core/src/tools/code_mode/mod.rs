@@ -2,6 +2,7 @@ mod actionable_state;
 mod delegate;
 mod execute_handler;
 pub(crate) mod execute_spec;
+pub(crate) mod pwrdrvr_token_miser;
 mod reducer;
 mod response_adapter;
 mod telemetry;
@@ -104,6 +105,7 @@ pub(crate) struct CodeModeService {
     /// Reducers can summarize the accompanying output but cannot replace this
     /// state without echoing it exactly.
     actionable_states: ActionableStateStore,
+    pwrdrvr_token_miser: pwrdrvr_token_miser::PwrdrvrTokenMiserGate,
     unavailable_warning_emitted: AtomicBool,
 }
 
@@ -148,6 +150,7 @@ impl CodeModeService {
             direct_parent_intents: Mutex::new(HashMap::new()),
             cell_parent_intents: Mutex::new(HashMap::new()),
             actionable_states: ActionableStateStore::default(),
+            pwrdrvr_token_miser: pwrdrvr_token_miser::PwrdrvrTokenMiserGate::new(),
             unavailable_warning_emitted: AtomicBool::new(false),
         }
     }
@@ -171,6 +174,37 @@ impl CodeModeService {
             }))
             .await;
         }
+    }
+
+    pub(crate) fn set_pwrdrvr_token_miser_activation_nonce(
+        &self,
+        activation_nonce: Option<Arc<str>>,
+    ) {
+        self.pwrdrvr_token_miser
+            .set_activation_nonce(activation_nonce);
+    }
+
+    pub(crate) fn pwrdrvr_token_miser_is_enabled(&self) -> bool {
+        self.pwrdrvr_token_miser.is_enabled()
+    }
+
+    pub(crate) async fn run_pwrdrvr_token_miser(
+        &self,
+        request: &codex_hooks::PostToolUseRequest,
+    ) -> Option<pwrdrvr_token_miser::ManagedPostToolUseReplacement> {
+        self.pwrdrvr_token_miser.run(request).await
+    }
+
+    pub(crate) async fn accept_pwrdrvr_token_miser_replacement(
+        &self,
+        acceptance: &pwrdrvr_token_miser::ManagedPostToolUseAcceptance,
+        session_id: &str,
+        turn_id: &str,
+        tool_use_id: &str,
+    ) {
+        self.pwrdrvr_token_miser
+            .accept(acceptance, session_id, turn_id, tool_use_id)
+            .await;
     }
 
     pub(crate) fn record_actionable_tool_result(
@@ -691,7 +725,7 @@ fn submit_nested_tool(
     };
 
     let call = ToolCall {
-        tool_name: tool_name.clone(),
+        tool_name,
         call_id,
         payload,
         encrypted_function_args: None,
@@ -868,7 +902,11 @@ mod tests {
     }
 
     fn service(config: &CodeModeConfig) -> CodeModeService {
-        CodeModeService::new(Arc::new(DisabledCodeModeSessionProvider), config)
+        CodeModeService::new(
+            Arc::new(DisabledCodeModeSessionProvider),
+            config,
+            /*executed_tool_calls*/ None,
+        )
     }
 
     #[tokio::test]

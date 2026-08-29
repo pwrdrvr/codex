@@ -1762,6 +1762,7 @@ impl CodexClient {
                     ),
                     mcp_server_openai_form_elicitation: false,
                     extensions: None,
+                    pwrdrvr_token_miser: None,
                 }),
             },
         };
