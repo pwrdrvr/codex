@@ -13,6 +13,20 @@ pub struct ServerCapabilitiesReadParams {}
 #[ts(export_to = "v2/")]
 pub struct ServerCapabilitiesReadResponse {
     pub code_mode_output_reducer: CodeModeOutputReducerCapability,
+    pub pwrdrvr_token_miser: PwrdrvrTokenMiserCapability,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PwrdrvrTokenMiserCapability {
+    pub version: u32,
+    pub identity: String,
+    pub initialize_capability_field: String,
+    pub thread_start_field: String,
+    pub thread_resume_field: String,
+    pub descriptor_environment_variable: String,
+    pub descriptor_version: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
