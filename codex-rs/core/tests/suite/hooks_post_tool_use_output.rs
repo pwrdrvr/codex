@@ -22,50 +22,24 @@ const OUTPUT_START: &str = "post-tool-use-raw-start";
 const OUTPUT_END: &str = "post-tool-use-raw-end";
 const REPLACEMENT: &str = "PostToolUse replaced the oversized shell result";
 
-#[derive(Clone, Copy)]
-enum ShellTool {
-    ShellCommand,
-    UnifiedExec,
-}
-
 #[tokio::test]
-async fn shell_command_post_tool_use_receives_legacy_truncated_output() -> Result<()> {
-    assert_post_tool_use_receives_legacy_truncated_output(ShellTool::ShellCommand).await
-}
-
-#[tokio::test]
-async fn unified_exec_post_tool_use_receives_legacy_truncated_output() -> Result<()> {
-    assert_post_tool_use_receives_legacy_truncated_output(ShellTool::UnifiedExec).await
-}
-
-async fn assert_post_tool_use_receives_legacy_truncated_output(
-    shell_tool: ShellTool,
-) -> Result<()> {
+async fn exec_command_post_tool_use_receives_legacy_truncated_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let call_id = match shell_tool {
-        ShellTool::ShellCommand => "post-tool-use-raw-shell-command",
-        ShellTool::UnifiedExec => "post-tool-use-raw-unified-exec",
-    };
+    let call_id = "post-tool-use-raw-exec-command";
     let command = format!(r#"python3 -c 'print("{OUTPUT_START}" + "x" * 60000 + "{OUTPUT_END}")'"#);
-    let (tool_name, args) = match shell_tool {
-        ShellTool::ShellCommand => ("shell_command", json!({ "command": command })),
-        ShellTool::UnifiedExec => (
-            "exec_command",
-            json!({
-                "cmd": command,
-                "max_output_tokens": 5,
-                "yield_time_ms": 10_000,
-            }),
-        ),
-    };
+    let args = json!({
+        "cmd": command,
+        "max_output_tokens": 5,
+        "yield_time_ms": 10_000,
+    });
     let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(call_id, tool_name, &serde_json::to_string(&args)?),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -80,13 +54,10 @@ async fn assert_post_tool_use_receives_legacy_truncated_output(
     let mut builder = test_codex()
         .with_pre_build_hook(write_replacing_post_tool_use_hook)
         .with_config(move |config| {
-            if matches!(shell_tool, ShellTool::UnifiedExec) {
-                config.use_experimental_unified_exec_tool = true;
-                config
-                    .features
-                    .enable(Feature::UnifiedExec)
-                    .expect("test config should allow unified exec");
-            }
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow unified exec");
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;

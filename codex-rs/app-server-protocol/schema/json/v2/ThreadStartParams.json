@@ -228,6 +228,23 @@
       ],
       "type": "string"
     },
+    "PwrdrvrTokenMiserActivation": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled",
+        "version"
+      ],
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -376,6 +393,17 @@
         }
       ],
       "description": "@deprecated `friendly` and `pragmatic` no longer select a style."
+    },
+    "pwrdrvrTokenMiser": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PwrdrvrTokenMiserActivation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Activate only the PwrAgent-managed Token Miser bridge negotiated at initialize."
     },
     "sandbox": {
       "anyOf": [

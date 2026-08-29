@@ -227,15 +227,58 @@
         "turnIdField"
       ],
       "type": "object"
+    },
+    "PwrdrvrTokenMiserCapability": {
+      "properties": {
+        "descriptorEnvironmentVariable": {
+          "type": "string"
+        },
+        "descriptorVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "identity": {
+          "type": "string"
+        },
+        "initializeCapabilityField": {
+          "type": "string"
+        },
+        "threadResumeField": {
+          "type": "string"
+        },
+        "threadStartField": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "descriptorEnvironmentVariable",
+        "descriptorVersion",
+        "identity",
+        "initializeCapabilityField",
+        "threadResumeField",
+        "threadStartField",
+        "version"
+      ],
+      "type": "object"
     }
   },
   "properties": {
     "codeModeOutputReducer": {
       "$ref": "#/definitions/CodeModeOutputReducerCapability"
+    },
+    "pwrdrvrTokenMiser": {
+      "$ref": "#/definitions/PwrdrvrTokenMiserCapability"
     }
   },
   "required": [
-    "codeModeOutputReducer"
+    "codeModeOutputReducer",
+    "pwrdrvrTokenMiser"
   ],
   "title": "ServerCapabilitiesReadResponse",
   "type": "object"

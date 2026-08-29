@@ -262,6 +262,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                         opt_out_notification_methods: None,
                         mcp_server_openai_form_elicitation: false,
                         extensions: None,
+                        pwrdrvr_token_miser: None,
                     }),
                 },
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),
