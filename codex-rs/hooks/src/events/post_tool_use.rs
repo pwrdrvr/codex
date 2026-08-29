@@ -1,3 +1,6 @@
+use std::borrow::Cow;
+use std::io;
+use std::io::Write;
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
@@ -8,6 +11,7 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Serialize;
 use serde_json::Value;
 
 use super::common;
@@ -17,8 +21,6 @@ use crate::engine::HandlerRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::output_spill::AdditionalContext;
-use crate::schema::PostToolUseCommandInput;
-use crate::schema::SubagentCommandInputFields;
 
 #[derive(Debug, Clone)]
 pub struct PostToolUseRequest {
@@ -39,6 +41,27 @@ pub struct PostToolUseRequest {
     pub code_mode_cell_id: Option<String>,
     pub code_mode_tool_call_id: Option<String>,
     pub parent_intent: Option<String>,
+}
+
+impl PostToolUseRequest {
+    /// Serializes the stable command-hook stdin contract for a managed transport.
+    pub fn command_input_json(&self) -> Result<String, serde_json::Error> {
+        command_input_json(self)
+    }
+
+    /// Serializes the stable command-hook stdin contract without exceeding
+    /// `max_bytes` or cloning the potentially large tool values.
+    pub fn command_input_json_bounded(
+        &self,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, serde_json::Error> {
+        let mut writer = BoundedWriter {
+            bytes: Vec::new(),
+            max_bytes,
+        };
+        serde_json::to_writer(&mut writer, &command_input(self))?;
+        Ok(writer.bytes)
+    }
 }
 
 #[derive(Debug)]
@@ -167,30 +190,96 @@ pub(crate) async fn run(
 /// events across processes. Shell-like tools pass `{ "command": ... }` as
 /// `tool_input`; MCP tools pass their resolved JSON arguments.
 fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json::Error> {
-    let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
-    serde_json::to_string(&PostToolUseCommandInput {
+    serde_json::to_string(&command_input(request))
+}
+
+#[derive(Serialize)]
+struct BorrowedPostToolUseCommandInput<'a> {
+    session_id: String,
+    turn_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_type: Option<&'a str>,
+    transcript_path: Option<Cow<'a, str>>,
+    cwd: Cow<'a, str>,
+    hook_event_name: &'static str,
+    model: &'a str,
+    permission_mode: &'a str,
+    tool_name: &'a str,
+    tool_input: &'a Value,
+    tool_response: &'a Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_miser_exact_tool_response_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_miser_exact_tool_response: Option<&'a Value>,
+    tool_use_id: &'a str,
+    is_code_mode_nested: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_mode_cell_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_mode_tool_call_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_intent: Option<&'a str>,
+    token_miser_acceptance_version: u32,
+    token_miser_grouping_version: u32,
+}
+
+fn command_input(request: &PostToolUseRequest) -> BorrowedPostToolUseCommandInput<'_> {
+    BorrowedPostToolUseCommandInput {
         session_id: request.session_id.to_string(),
-        turn_id: request.turn_id.clone(),
-        agent_id: subagent.agent_id,
-        agent_type: subagent.agent_type,
-        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
-        cwd: request.cwd.display().to_string(),
-        hook_event_name: "PostToolUse".to_string(),
-        model: request.model.clone(),
-        permission_mode: request.permission_mode.clone(),
-        tool_name: request.tool_name.clone(),
-        tool_input: request.tool_input.clone(),
-        tool_response: request.tool_response.clone(),
+        turn_id: &request.turn_id,
+        agent_id: request
+            .subagent
+            .as_ref()
+            .map(|subagent| subagent.agent_id.as_str()),
+        agent_type: request
+            .subagent
+            .as_ref()
+            .map(|subagent| subagent.agent_type.as_str()),
+        transcript_path: request
+            .transcript_path
+            .as_ref()
+            .map(|path| path.to_string_lossy()),
+        cwd: request.cwd.as_path().to_string_lossy(),
+        hook_event_name: "PostToolUse",
+        model: &request.model,
+        permission_mode: &request.permission_mode,
+        tool_name: &request.tool_name,
+        tool_input: &request.tool_input,
+        tool_response: &request.tool_response,
         token_miser_exact_tool_response_version: request.exact_tool_response.as_ref().map(|_| 1),
-        token_miser_exact_tool_response: request.exact_tool_response.clone(),
-        tool_use_id: request.tool_use_id.clone(),
+        token_miser_exact_tool_response: request.exact_tool_response.as_ref(),
+        tool_use_id: &request.tool_use_id,
         is_code_mode_nested: request.is_code_mode_nested,
-        code_mode_cell_id: request.code_mode_cell_id.clone(),
-        code_mode_tool_call_id: request.code_mode_tool_call_id.clone(),
-        parent_intent: request.parent_intent.clone(),
+        code_mode_cell_id: request.code_mode_cell_id.as_deref(),
+        code_mode_tool_call_id: request.code_mode_tool_call_id.as_deref(),
+        parent_intent: request.parent_intent.as_deref(),
         token_miser_acceptance_version: 1,
         token_miser_grouping_version: 1,
-    })
+    }
+}
+
+struct BoundedWriter {
+    bytes: Vec<u8>,
+    max_bytes: usize,
+}
+
+impl Write for BoundedWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if buffer.len() > self.max_bytes.saturating_sub(self.bytes.len()) {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "PostToolUse input exceeds its byte limit",
+            ));
+        }
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn parse_completed(
@@ -389,6 +478,21 @@ mod tests {
             serde_json::from_str(&input_json).expect("parse command input");
 
         assert_eq!(input["tool_name"], "apply_patch");
+    }
+
+    #[test]
+    fn bounded_command_input_rejects_oversized_exact_response() {
+        let mut request = request_for_tool_use("call-oversized");
+        request.exact_tool_response = Some(json!("x".repeat(1_024)));
+
+        let error = request
+            .command_input_json_bounded(/*max_bytes*/ 128)
+            .expect_err("oversized hook input should be rejected while serializing");
+
+        assert_eq!(
+            error.io_error_kind(),
+            Some(std::io::ErrorKind::FileTooLarge)
+        );
     }
 
     #[test]

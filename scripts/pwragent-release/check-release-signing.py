@@ -216,9 +216,30 @@ require(
 )
 require(release_candidate, "name: signed-release-candidate", "release-candidate")
 require(release_candidate, "contents: read", "release-candidate")
+for fragment in (
+    "attestations: write",
+    "id-token: write",
+    "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0",
+    "create-storage-record: false",
+    "scripts/pwragent-release/generate-update-manifest.py manifest",
+    "pwragent-codex-update-v1.json",
+    "pwragent-codex-update-v1.json.sigstore.json",
+    "scripts/pwragent-release/generate-update-manifest.py marker",
+    "pwragent-codex-publication-complete-v1.json",
+):
+    require(release_candidate, fragment, "signed update metadata")
 require(release, "- release-candidate", "release")
 require(release, "name: signed-release-candidate", "release")
 require(release, "contents: write", "release")
+for fragment in (
+    'marker="dist/pwragent-codex-publication-complete-v1.json"',
+    '! -name "$(basename "$marker")"',
+    'gh release create "$RELEASE_TAG" "${assets[@]}"',
+    "--draft",
+    'gh release upload "$RELEASE_TAG" "$marker"',
+    'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false',
+):
+    require(release, fragment, "publication-complete marker ordering")
 
 for fragment in (
     "WIN_AZURE_SIGN_PUBLISHER_NAME = $env:WIN_AZURE_SIGN_PUBLISHER_NAME",
@@ -319,6 +340,9 @@ for fragment in (
     "`ci:release-signing`",
     "`signed-release-candidate`",
     "`pwragent-v`",
+    "`pwragent-codex-update-v1.json`",
+    "`pwragent-codex-update-v1.json.sigstore.json`",
+    "`pwragent-codex-publication-complete-v1.json`",
 ):
     require(runbook, fragment, "release signing runbook")
 

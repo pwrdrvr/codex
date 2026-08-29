@@ -2805,6 +2805,10 @@ mod tests {
                             "mimeTypes": ["text/html;profile=mcp-app"],
                         }),
                     )])),
+                    pwrdrvr_token_miser: Some(v1::PwrdrvrTokenMiserInitializeCapability {
+                        version: 1,
+                        activation_nonce: "activation-nonce".to_string(),
+                    }),
                 }),
             },
         };
@@ -2831,6 +2835,10 @@ mod tests {
                             "io.modelcontextprotocol/ui": {
                                 "mimeTypes": ["text/html;profile=mcp-app"]
                             }
+                        },
+                        "pwrdrvrTokenMiser": {
+                            "version": 1,
+                            "activationNonce": "activation-nonce"
                         }
                     }
                 }
@@ -2863,6 +2871,10 @@ mod tests {
                         "io.modelcontextprotocol/ui": {
                             "mimeTypes": ["text/html;profile=mcp-app"]
                         }
+                    },
+                    "pwrdrvrTokenMiser": {
+                        "version": 1,
+                        "activationNonce": "activation-nonce"
                     }
                 }
             }
@@ -2893,6 +2905,10 @@ mod tests {
                                 "mimeTypes": ["text/html;profile=mcp-app"],
                             }),
                         )])),
+                        pwrdrvr_token_miser: Some(v1::PwrdrvrTokenMiserInitializeCapability {
+                            version: 1,
+                            activation_nonce: "activation-nonce".to_string(),
+                        },),
                     }),
                 },
             }
