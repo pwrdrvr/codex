@@ -303,7 +303,7 @@ fn model_visible_tool_output_for_call(body: &Value, call_id: &str) -> String {
 async fn without_a_reducer_the_model_sees_the_script_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let output = run_turn_and_read_model_visible_output(None).await?;
+    let output = run_turn_and_read_model_visible_output(/*reducer*/ None).await?;
 
     assert!(
         output.contains(NOISE_LINE),
@@ -468,7 +468,7 @@ async fn consumer_guidance_appears_only_at_its_model_boundaries() -> Result<()> 
 async fn a_configured_reducer_uses_neutral_concurrency_guidance() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let without_reducer = exec_description(None).await?;
+    let without_reducer = exec_description(/*reducer*/ None).await?;
     assert!(!without_reducer.contains(DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE));
 
     let descriptor_dir = TempDir::new()?;
@@ -502,8 +502,11 @@ async fn a_reducer_preserves_parallel_nested_execution_and_acknowledges_the_repl
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let unreduced =
-        run_script_and_read_model_visible_output(PARALLEL_SCRIPT.to_string(), None).await?;
+    let unreduced = run_script_and_read_model_visible_output(
+        PARALLEL_SCRIPT.to_string(),
+        /*reducer*/ None,
+    )
+    .await?;
     assert!(
         unreduced.contains(r#""results":["ok","ok"]"#),
         "both barrier-backed nested calls should complete without a reducer: {unreduced}"
