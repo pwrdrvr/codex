@@ -98,6 +98,9 @@ pub struct ThreadStartParams {
     pub permissions: Option<String>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
+    /// Activate only the PwrAgent-managed Token Miser bridge negotiated at initialize.
+    #[ts(optional = nullable)]
+    pub pwrdrvr_token_miser: Option<PwrdrvrTokenMiserActivation>,
     #[ts(optional = nullable)]
     pub service_name: Option<String>,
     #[ts(optional = nullable)]
@@ -389,6 +392,16 @@ pub struct ThreadResumeParams {
     pub permissions: Option<String>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
+    /// Change the PwrAgent-managed Token Miser activation for this loaded thread.
+    /// Omission preserves the current state; explicit null disables it.
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub pwrdrvr_token_miser: Option<Option<PwrdrvrTokenMiserActivation>>,
     /// Replace the dynamic tools used by subsequent turns in this resumed session.
     #[experimental("thread/resume.dynamicTools")]
     #[serde(
@@ -415,6 +428,14 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.initialTurnsPage")]
     #[ts(optional = nullable)]
     pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PwrdrvrTokenMiserActivation {
+    pub version: u32,
+    pub enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

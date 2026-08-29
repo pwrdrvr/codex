@@ -179,6 +179,7 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) client_version: String,
     pub(crate) request_attestation: bool,
     pub(crate) client_mcp_extensions: ClientMcpExtensions,
+    pub(crate) pwrdrvr_token_miser_activation_nonce: Option<String>,
 }
 
 impl Default for ConnectionSessionState {
@@ -236,6 +237,12 @@ impl ConnectionSessionState {
             .get()
             .map(|session| session.client_mcp_extensions.clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn pwrdrvr_token_miser_activation_nonce(&self) -> Option<&str> {
+        self.initialized
+            .get()
+            .and_then(|session| session.pwrdrvr_token_miser_activation_nonce.as_deref())
     }
     pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
         self.initialized.set(session).map_err(|_| ())
@@ -959,6 +966,9 @@ impl MessageProcessor {
         let connection_id = connection_request_id.connection_id;
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
+        let pwrdrvr_token_miser_activation_nonce = session
+            .pwrdrvr_token_miser_activation_nonce()
+            .map(str::to_string);
         let client_mcp_extensions = session.client_mcp_extensions();
         let request_id = ConnectionRequestId {
             connection_id,
@@ -1124,6 +1134,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        pwrdrvr_token_miser_activation_nonce.clone(),
                         client_mcp_extensions.clone(),
                         request_context,
                     )
@@ -1147,6 +1158,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        pwrdrvr_token_miser_activation_nonce.clone(),
                         client_mcp_extensions.clone(),
                     )
                     .await

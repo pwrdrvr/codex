@@ -6,6 +6,7 @@ use super::thread_input::can_accept_direct_input;
 use super::thread_input::ensure_direct_input_allowed;
 use super::*;
 use crate::error_code::method_not_found;
+use codex_app_server_protocol::PwrdrvrTokenMiserActivation;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
 use codex_app_server_protocol::ThreadRevertParams;
@@ -31,6 +32,71 @@ const THREAD_ROLLBACK_DEPRECATION_SUMMARY: &str =
     "thread/rollback is deprecated and will be removed soon";
 const PAGINATED_FULL_HISTORY_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.";
 const PAGINATED_THREAD_READ_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.";
+
+#[derive(Clone)]
+enum PwrdrvrTokenMiserActivationChange {
+    Preserve,
+    Set(Option<Arc<str>>),
+}
+
+impl PwrdrvrTokenMiserActivationChange {
+    fn is_explicit(&self) -> bool {
+        matches!(self, Self::Set(_))
+    }
+
+    fn apply_to(&self, thread: &CodexThread) {
+        if let Self::Set(activation_nonce) = self {
+            thread.set_pwrdrvr_token_miser_activation_nonce(activation_nonce.clone());
+        }
+    }
+}
+
+async fn validate_pwrdrvr_token_miser_activation(
+    activation: &PwrdrvrTokenMiserActivation,
+    client_name: Option<&str>,
+    negotiated_nonce: Option<&str>,
+) -> Result<Arc<str>, JSONRPCErrorError> {
+    let negotiated_nonce = require_pwrdrvr_token_miser_negotiation(client_name, negotiated_nonce)?;
+    if activation.version != 1 || !activation.enabled {
+        return Err(invalid_params(
+            "pwrdrvrTokenMiser activation requires version 1 and enabled true",
+        ));
+    }
+    codex_core::validate_pwrdrvr_token_miser_activation(negotiated_nonce)
+        .await
+        .map_err(|error| invalid_params(format!("invalid PwrAgent Token Miser bridge: {error}")))?;
+    Ok(Arc::from(negotiated_nonce))
+}
+
+async fn resolve_pwrdrvr_token_miser_activation_change(
+    requested: Option<&Option<PwrdrvrTokenMiserActivation>>,
+    client_name: Option<&str>,
+    negotiated_nonce: Option<&str>,
+) -> Result<PwrdrvrTokenMiserActivationChange, JSONRPCErrorError> {
+    let Some(requested) = requested else {
+        return Ok(PwrdrvrTokenMiserActivationChange::Preserve);
+    };
+    if let Some(activation) = requested {
+        return validate_pwrdrvr_token_miser_activation(activation, client_name, negotiated_nonce)
+            .await
+            .map(|nonce| PwrdrvrTokenMiserActivationChange::Set(Some(nonce)));
+    }
+    require_pwrdrvr_token_miser_negotiation(client_name, negotiated_nonce)?;
+    Ok(PwrdrvrTokenMiserActivationChange::Set(None))
+}
+
+fn require_pwrdrvr_token_miser_negotiation<'a>(
+    client_name: Option<&str>,
+    negotiated_nonce: Option<&'a str>,
+) -> Result<&'a str, JSONRPCErrorError> {
+    if client_name != Some("pwragent-desktop") {
+        return Err(invalid_params(
+            "pwrdrvrTokenMiser is reserved for clientInfo.name `pwragent-desktop`",
+        ));
+    }
+    negotiated_nonce
+        .ok_or_else(|| invalid_params("pwrdrvrTokenMiser must be negotiated during initialize"))
+}
 
 async fn stage_pending_project_metadata(
     thread_manager: &ThreadManager,
@@ -539,6 +605,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        pwrdrvr_token_miser_activation_nonce: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
         request_context: RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
@@ -547,6 +614,7 @@ impl ThreadRequestProcessor {
             params,
             app_server_client_name,
             app_server_client_version,
+            pwrdrvr_token_miser_activation_nonce,
             client_mcp_extensions,
             request_context,
         )
@@ -570,6 +638,7 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        pwrdrvr_token_miser_activation_nonce: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_resume_inner(
@@ -577,6 +646,7 @@ impl ThreadRequestProcessor {
             params,
             app_server_client_name,
             app_server_client_version,
+            pwrdrvr_token_miser_activation_nonce,
             client_mcp_extensions,
         )
         .await
@@ -1141,6 +1211,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        pwrdrvr_token_miser_activation_nonce: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
@@ -1156,6 +1227,7 @@ impl ThreadRequestProcessor {
             sandbox,
             permissions,
             config,
+            pwrdrvr_token_miser,
             service_name,
             base_instructions,
             developer_instructions,
@@ -1172,6 +1244,17 @@ impl ThreadRequestProcessor {
             project_id,
             environments,
         } = params;
+        let pwrdrvr_token_miser_activation_nonce = match pwrdrvr_token_miser.as_ref() {
+            Some(activation) => Some(
+                validate_pwrdrvr_token_miser_activation(
+                    activation,
+                    app_server_client_name.as_deref(),
+                    pwrdrvr_token_miser_activation_nonce.as_deref(),
+                )
+                .await?,
+            ),
+            None => None,
+        };
         if matches!(
             history_mode,
             Some(codex_app_server_protocol::ThreadHistoryMode::Paginated)
@@ -1248,6 +1331,7 @@ impl ThreadRequestProcessor {
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
+                pwrdrvr_token_miser_activation_nonce,
                 client_mcp_extensions,
                 config,
                 typesafe_overrides,
@@ -1327,6 +1411,7 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        pwrdrvr_token_miser_activation_nonce: Option<Arc<str>>,
         client_mcp_extensions: ClientMcpExtensions,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
@@ -1514,6 +1599,7 @@ impl ThreadRequestProcessor {
             }
         };
         let session_telemetry = thread.session_telemetry();
+        thread.set_pwrdrvr_token_miser_activation_nonce(pwrdrvr_token_miser_activation_nonce);
         session_telemetry.record_startup_phase(
             "thread_start_create_thread",
             create_thread_started_at.elapsed(),
@@ -3603,8 +3689,23 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        pwrdrvr_token_miser_activation_nonce: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> Result<(), JSONRPCErrorError> {
+        let pwrdrvr_token_miser_activation_change =
+            match resolve_pwrdrvr_token_miser_activation_change(
+                params.pwrdrvr_token_miser.as_ref(),
+                app_server_client_name.as_deref(),
+                pwrdrvr_token_miser_activation_nonce.as_deref(),
+            )
+            .await
+            {
+                Ok(change) => change,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return Ok(());
+                }
+            };
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
                 .pending_thread_unloads
@@ -3656,6 +3757,7 @@ impl ThreadRequestProcessor {
                 &params,
                 app_server_client_name.clone(),
                 app_server_client_version.clone(),
+                pwrdrvr_token_miser_activation_change.clone(),
                 /*cold_resume_history*/ None,
             )
             .await
@@ -3682,6 +3784,7 @@ impl ThreadRequestProcessor {
             sandbox,
             permissions,
             config: mut request_overrides,
+            pwrdrvr_token_miser: _pwrdrvr_token_miser,
             dynamic_tools,
             base_instructions,
             developer_instructions,
@@ -3768,6 +3871,7 @@ impl ThreadRequestProcessor {
                     &attach_params,
                     app_server_client_name,
                     app_server_client_version,
+                    PwrdrvrTokenMiserActivationChange::Preserve,
                     cold_resume_history,
                 )
                 .await?
@@ -3866,6 +3970,7 @@ impl ThreadRequestProcessor {
                 session_configured,
                 ..
             }) => {
+                pwrdrvr_token_miser_activation_change.apply_to(codex_thread.as_ref());
                 if let Some(dynamic_tools) = dynamic_tools {
                     codex_thread.refresh_dynamic_tools(dynamic_tools).await;
                 }
@@ -4129,6 +4234,7 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        pwrdrvr_token_miser_activation_change: PwrdrvrTokenMiserActivationChange,
         cold_resume_history: Option<&[RolloutItem]>,
     ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
@@ -4215,8 +4321,16 @@ impl ThreadRequestProcessor {
                 )));
             }
             let config_snapshot = existing_thread.config_snapshot().await;
+            let agent_status = existing_thread.agent_status().await;
+            if pwrdrvr_token_miser_activation_change.is_explicit()
+                && matches!(agent_status, AgentStatus::Running)
+            {
+                return Err(invalid_request(format!(
+                    "cannot change PwrAgent Token Miser activation while thread {existing_thread_id} has an active turn"
+                )));
+            }
             if has_code_mode_reduction_config_override(params.config.as_ref()) {
-                if matches!(existing_thread.agent_status().await, AgentStatus::Running) {
+                if matches!(agent_status, AgentStatus::Running) {
                     return Err(invalid_request(format!(
                         "cannot refresh the Code Mode output reducer while thread {existing_thread_id} has an active turn"
                     )));
@@ -4289,6 +4403,7 @@ impl ThreadRequestProcessor {
             }
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
+            pwrdrvr_token_miser_activation_change.apply_to(existing_thread.as_ref());
             let include_turns = !params.exclude_turns;
             if paginated_resume && include_turns {
                 self.send_deprecation_notice(

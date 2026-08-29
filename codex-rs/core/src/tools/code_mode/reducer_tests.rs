@@ -252,7 +252,10 @@ async fn reducer_does_not_follow_redirects() {
     let original = large_original();
     let reduced = harness.reduce(original.clone()).await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
     assert!(
         redirect_target
             .received_requests()
@@ -682,7 +685,7 @@ async fn reducer_that_loses_actionable_state_fails_open_without_acceptance() {
         .reduce_with_context(&reduction_context, original.clone())
         .await;
 
-    let mut expected = truncate_code_mode_result(original, None);
+    let mut expected = truncate_code_mode_result(original, /*max_output_tokens*/ None);
     expected.extend(
         actionable_state
             .output_items()
@@ -724,7 +727,7 @@ async fn reducer_that_conflicts_with_actionable_state_fails_open() {
         .reduce_with_context(&reduction_context, original.clone())
         .await;
 
-    let mut expected = truncate_code_mode_result(original, None);
+    let mut expected = truncate_code_mode_result(original, /*max_output_tokens*/ None);
     expected.extend(
         actionable_state
             .output_items()
@@ -752,8 +755,8 @@ async fn reduction_request_omits_an_unknown_script() {
         Some(&harness.reducer),
         &context,
         large_original(),
-        None,
-        None,
+        /*max_output_tokens*/ None,
+        /*ceiling*/ None,
     )
     .await;
 
@@ -788,7 +791,10 @@ async fn timed_out_reducer_falls_back_to_truncation() {
     let original = large_original();
     let reduced = harness.reduce(original.clone()).await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
 }
 
 /// Garbage on the wire is treated the same as no reducer at all.
@@ -804,7 +810,10 @@ async fn malformed_reducer_response_falls_back_to_truncation() {
     let original = large_original();
     let reduced = harness.reduce(original.clone()).await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
 }
 
 /// A structurally valid response whose items are the wrong shape is still garbage.
@@ -822,7 +831,10 @@ async fn reducer_response_with_invalid_content_items_falls_back_to_truncation() 
     let original = large_original();
     let reduced = harness.reduce(original.clone()).await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
 }
 
 #[tokio::test]
@@ -849,7 +861,10 @@ async fn reducer_media_replacement_fails_open_without_acceptance() {
 
     let reduced = harness.reduce(original.clone()).await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
     let requests = harness
         .server
         .received_requests()
@@ -886,7 +901,10 @@ async fn serialized_request_size_includes_reduction_context() {
     )
     .await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
     assert!(
         harness
             .server
@@ -964,10 +982,19 @@ async fn chunked_response_stops_reading_at_the_configured_limit() {
     let original = large_original();
     let started_at = Instant::now();
 
-    let reduced =
-        apply_output_reduction(Some(&reducer), &context(), original.clone(), None, None).await;
+    let reduced = apply_output_reduction(
+        Some(&reducer),
+        &context(),
+        original.clone(),
+        /*max_output_tokens*/ None,
+        /*ceiling*/ None,
+    )
+    .await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
     assert!(
         started_at.elapsed() < Duration::from_secs(1),
         "the client buffered an unterminated oversized body until timeout"
@@ -988,7 +1015,10 @@ async fn reducer_error_status_falls_back_to_truncation() {
     let original = large_original();
     let reduced = harness.reduce(original.clone()).await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
 }
 
 /// An unauthenticated caller gets nothing, and the seam still produces usable output.
@@ -1007,7 +1037,10 @@ async fn reducer_that_rejects_the_token_falls_back_to_truncation() {
     let original = large_original();
     let reduced = harness.reduce(original.clone()).await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
 }
 
 /// Below the threshold the reducer is never contacted, so small results stay zero-latency.
@@ -1025,7 +1058,10 @@ async fn payload_below_the_threshold_never_contacts_the_reducer() {
     let original = vec![text("small")];
     let reduced = harness.reduce(original.clone()).await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
     assert!(
         harness
             .server
@@ -1054,17 +1090,32 @@ async fn missing_descriptor_falls_back_to_truncation() {
     let reducer: Arc<dyn CodeModeOutputReducer> = Arc::new(reducer);
 
     let original = large_original();
-    let reduced =
-        apply_output_reduction(Some(&reducer), &context(), original.clone(), None, None).await;
+    let reduced = apply_output_reduction(
+        Some(&reducer),
+        &context(),
+        original.clone(),
+        /*max_output_tokens*/ None,
+        /*ceiling*/ None,
+    )
+    .await;
 
-    assert_eq!(reduced, truncate_code_mode_result(original, None));
+    assert_eq!(
+        reduced,
+        truncate_code_mode_result(original, /*max_output_tokens*/ None)
+    );
 }
 
 #[test]
 fn ceiling_clamps_the_model_supplied_budget() {
     // The unconditional model-context cap binds even without a host ceiling.
-    assert_eq!(clamp_max_output_tokens(Some(200_000), None), Some(10_000));
-    assert_eq!(clamp_max_output_tokens(None, None), Some(10_000));
+    assert_eq!(
+        clamp_max_output_tokens(Some(200_000), /*ceiling*/ None),
+        Some(10_000)
+    );
+    assert_eq!(
+        clamp_max_output_tokens(/*requested*/ None, /*ceiling*/ None),
+        Some(10_000)
+    );
     // A ceiling binds an oversized request down.
     assert_eq!(
         clamp_max_output_tokens(Some(200_000), Some(4_000)),
@@ -1076,8 +1127,14 @@ fn ceiling_clamps_the_model_supplied_budget() {
         Some(1_000)
     );
     // ...and binds the built-in default too, so omitting the argument cannot evade it.
-    assert_eq!(clamp_max_output_tokens(None, Some(4_000)), Some(4_000));
-    assert_eq!(clamp_max_output_tokens(None, Some(20_000)), Some(10_000));
+    assert_eq!(
+        clamp_max_output_tokens(/*requested*/ None, Some(4_000)),
+        Some(4_000)
+    );
+    assert_eq!(
+        clamp_max_output_tokens(/*requested*/ None, Some(20_000)),
+        Some(10_000)
+    );
 }
 
 /// End to end: the host ceiling wins over the budget the model asked for.

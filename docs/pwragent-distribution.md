@@ -24,7 +24,77 @@ stamp (version, source repository, source commit, target), and the binaries:
 - `codex-code-mode-host` — required for code mode; without it code mode fails
   closed.
 - `codex-windows-sandbox-setup`, `codex-command-runner` — Windows sandbox
-  helpers, Windows only.
+helpers, Windows only.
+
+## Managed update contract
+
+The first release carrying the managed Token Miser activation contract is
+`pwragent-v0.149.0-pwragent.1` (`0.149.0-pwragent.1`). PwrAgent selects exactly
+one of the five archive names in the table above using these stable pairs:
+
+| `os` | `arch` | `platform` |
+| --- | --- | --- |
+| `darwin` | `arm64` | `macos-aarch64` |
+| `darwin` | `x64` | `macos-x86_64` |
+| `linux` | `arm64` | `linux-aarch64` |
+| `linux` | `x64` | `linux-x86_64` |
+| `win32` | `x64` | `windows-x86_64` |
+
+Every published release has these metadata assets in addition to the five
+archives:
+
+- `SHA256SUMS` covers the five archives in GNU sha256sum format.
+- `pwragent-codex-update-v1.json` is the deterministic selection manifest.
+- `pwragent-codex-update-v1.json.sigstore.json` is the JSON-serialized Sigstore
+  bundle produced by `actions/attest` for the five archives, `SHA256SUMS`, and
+  the selection manifest.
+- `pwragent-codex-publication-complete-v1.json` is uploaded last. A release is
+  selectable only after this marker exists and its `complete` field is `true`.
+
+The manifest has this exact top-level contract:
+
+```json
+{
+  "schemaVersion": 1,
+  "product": "pwragent-codex",
+  "version": "<SemVer>",
+  "releaseTag": "pwragent-v<same SemVer>",
+  "source": {"repository": "pwrdrvr/codex", "commit": "<40 hex SHA>"},
+  "capabilities": {
+    "codeModeOutputReducer": {"protocolVersion": 1, "intentContextVersion": 1},
+    "pwrdrvrTokenMiser": {"version": 1, "identity": "pwrdrvr.pwragent.token-miser"}
+  },
+  "artifacts": [{
+    "file": "<exact archive name>",
+    "platform": "<stable platform>",
+    "os": "<stable os>",
+    "arch": "<stable arch>",
+    "target": "<Rust target>",
+    "archiveType": "tar.gz|zip",
+    "sha256": "<64 lowercase hex>",
+    "size": 123
+  }]
+}
+```
+
+The completion marker binds `version`, `releaseTag`, and `sourceCommit` to a
+`manifest` object containing the literal manifest filename, its SHA-256, the
+literal Sigstore bundle filename, and `signatureFormat:
+"sigstore-bundle-v0.3"`. PwrAgent must verify both the manifest and selected
+archive against that bundle, require repository `pwrdrvr/codex`, and require
+signer workflow `pwrdrvr/codex/.github/workflows/pwragent-release.yml` before
+installing. The bundle uses GitHub Actions OIDC and the public Sigstore service;
+it is independently verifiable with `gh attestation verify --bundle` and does
+not add another long-lived release secret.
+
+The certificate OIDC issuer must be exactly
+`https://token.actions.githubusercontent.com`, and its certificate identity must
+be exactly
+`https://github.com/pwrdrvr/codex/.github/workflows/pwragent-release.yml@refs/tags/<releaseTag>`.
+Verification must require the public Rekor transparency-log entry, GitHub event
+`push`, and ref `refs/tags/<releaseTag>`; the attested source commit must equal
+both `source.commit` in the manifest and `sourceCommit` in the completion
+marker.
 
 ## Deliberate differences from upstream `rust-release.yml`
 
@@ -153,10 +223,9 @@ The tag suffix after `pwragent-v` becomes the version verbatim and must be
 SemVer. Releases are immutable: the publish step fails if the tag already has a
 release rather than overwriting assets.
 
-Untagged runs (`workflow_dispatch`, or a labeled PR) derive
-`<workspace version>-pwragent.dev.<run number>`. Upstream leaves the workspace
-version at `0.0.0` on `main` and only bumps it on release branches, so dev
-builds usually read `0.0.0-pwragent.dev.N`.
+Untagged runs (`workflow_dispatch`, or a labeled PR) derive the reviewed
+baseline in `scripts/pwragent-release/upstream-version.txt` plus
+`-pwragent.dev.<run number>`.
 
 ## Branch layout
 

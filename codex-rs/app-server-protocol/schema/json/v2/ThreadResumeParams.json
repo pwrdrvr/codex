@@ -518,6 +518,23 @@
       ],
       "type": "string"
     },
+    "PwrdrvrTokenMiserActivation": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled",
+        "version"
+      ],
+      "type": "object"
+    },
     "ReasoningItemContent": {
       "oneOf": [
         {
@@ -1561,6 +1578,24 @@
           "type": "null"
         }
       ]
+    },
+    "pwrdrvrTokenMiser": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PwrdrvrTokenMiserActivation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Change the PwrAgent-managed Token Miser activation for this loaded thread. Omission preserves the current state; explicit null disables it."
     },
     "sandbox": {
       "anyOf": [

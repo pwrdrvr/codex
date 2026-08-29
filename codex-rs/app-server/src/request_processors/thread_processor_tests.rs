@@ -670,6 +670,7 @@ mod thread_processor_behavior_tests {
             sandbox: None,
             permissions: None,
             config: None,
+            pwrdrvr_token_miser: None,
             dynamic_tools: None,
             base_instructions: None,
             developer_instructions: None,

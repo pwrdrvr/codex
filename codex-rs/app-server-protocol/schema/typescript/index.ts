@@ -59,6 +59,7 @@ export type { ParsedCommand } from "./ParsedCommand";
 export type { PathUri } from "./PathUri";
 export type { Personality } from "./Personality";
 export type { PlanType } from "./PlanType";
+export type { PwrdrvrTokenMiserInitializeCapability } from "./PwrdrvrTokenMiserInitializeCapability";
 export type { RealtimeConversationVersion } from "./RealtimeConversationVersion";
 export type { RealtimeOutputModality } from "./RealtimeOutputModality";
 export type { RealtimeVoice } from "./RealtimeVoice";

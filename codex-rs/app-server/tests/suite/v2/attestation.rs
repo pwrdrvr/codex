@@ -86,6 +86,7 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         ),
     )

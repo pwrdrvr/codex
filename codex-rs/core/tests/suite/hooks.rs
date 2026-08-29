@@ -4118,7 +4118,6 @@ try {
                 .expect("write blocking post tool use hook fixture");
         })
         .with_config(|config| {
-            config.use_experimental_unified_exec_tool = true;
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::UnifiedExec);
             config.code_mode.output_reducer = Some(CodeModeOutputReducerConfig {
@@ -5275,13 +5274,13 @@ async fn post_tool_use_selected_replacement_is_acknowledged_with_direct_identity
         .await;
 
     let call_id = "posttooluse-direct-accept";
-    let args = serde_json::json!({ "command": "printf original-output" });
+    let args = serde_json::json!({ "cmd": "printf original-output", "tty": false });
     let responses = mount_sse_sequence(
         &responses_server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -5364,13 +5363,13 @@ async fn post_tool_use_unselected_response_id_keeps_original_without_acceptance(
         .to_string(),
     )?;
     let call_id = "posttooluse-direct-unselected";
-    let args = serde_json::json!({ "command": "printf original-output" });
+    let args = serde_json::json!({ "cmd": "printf original-output", "tty": false });
     let responses = mount_sse_sequence(
         &responses_server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
                 ev_completed("resp-1"),
             ]),
             sse(vec![

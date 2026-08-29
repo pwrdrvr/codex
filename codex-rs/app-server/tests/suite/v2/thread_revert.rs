@@ -530,6 +530,7 @@ async fn initialize_experimental(mcp: &mut TestAppServer) -> Result<()> {
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         ),
     )

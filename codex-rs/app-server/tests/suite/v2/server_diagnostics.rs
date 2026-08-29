@@ -16,6 +16,7 @@ use codex_app_server_protocol::CodeModePostToolUseGroupingCapability;
 use codex_app_server_protocol::DirectPostToolUseAcceptanceCapability;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::PwrdrvrTokenMiserCapability;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerCapabilitiesReadParams;
 use codex_app_server_protocol::ServerCapabilitiesReadResponse;
@@ -112,6 +113,16 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
                         tool_use_id_field: "tool_use_id".to_string(),
                     },
                 },
+            },
+            pwrdrvr_token_miser: PwrdrvrTokenMiserCapability {
+                version: 1,
+                identity: "pwrdrvr.pwragent.token-miser".to_string(),
+                initialize_capability_field: "pwrdrvrTokenMiser".to_string(),
+                thread_start_field: "pwrdrvrTokenMiser".to_string(),
+                thread_resume_field: "pwrdrvrTokenMiser".to_string(),
+                descriptor_environment_variable: "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH"
+                    .to_string(),
+                descriptor_version: 1,
             },
         }
     );
