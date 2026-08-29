@@ -147,6 +147,7 @@ async fn compaction_event_ingests_custom_fact() {
                         opt_out_notification_methods: None,
                         mcp_server_openai_form_elicitation: false,
                         extensions: None,
+                        pwrdrvr_token_miser: None,
                     }),
                 },
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),

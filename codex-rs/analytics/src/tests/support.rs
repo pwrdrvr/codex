@@ -591,6 +591,7 @@ pub(super) fn sample_initialize_fact(connection_id: u64) -> AnalyticsFact {
                 opt_out_notification_methods: None,
                 mcp_server_openai_form_elicitation: false,
                 extensions: None,
+                pwrdrvr_token_miser: None,
             }),
         },
         product_client_id: DEFAULT_ORIGINATOR.to_string(),

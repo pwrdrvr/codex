@@ -4275,7 +4275,7 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
     assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        r"(?s)^Warning: truncated output \(original token count: \d+\)\nTotal output lines: 1\n\nVariable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
         output,
     );
 
@@ -4319,10 +4319,14 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
         output.len()
     );
     // The boolean describes the nested result; the marker below comes from
-    // history truncating the value emitted with `text` afterward.
-    assert_regex_match(
-        r"(?s)^Variable truncated: True\. Variable: .*…\d+ tokens truncated…A+$",
-        output,
+    // the unconditional model-context cap truncating the value emitted with
+    // `text` afterward.
+    assert!(
+        output.starts_with("Warning: truncated output (original token count: ")
+            && output.contains("Variable truncated: True. Variable: Warning: truncated output")
+            && output.contains("tokens truncated")
+            && output.ends_with('A'),
+        "expected nested and model-context truncation framing"
     );
 
     Ok(())
@@ -4367,9 +4371,11 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
         "expected configured history cap to truncate the emitted value, got {} bytes",
         output.len()
     );
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
+    assert!(
+        output.starts_with("Warning: truncated output (original token count: ")
+            && output.contains("tokens truncated")
+            && output.ends_with('x'),
+        "expected the configured history cap to preserve bounded truncation framing"
     );
 
     Ok(())
@@ -4405,7 +4411,7 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
     assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        r"(?s)^Warning: truncated output \(original token count: \d+\)\nTotal output lines: 1\n\nVariable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
         output,
     );
 
@@ -4450,9 +4456,11 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
         "expected configured history cap to truncate the emitted value, got {} bytes",
         output.len()
     );
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
+    assert!(
+        output.starts_with("Warning: truncated output (original token count: ")
+            && output.contains("tokens truncated")
+            && output.ends_with('x'),
+        "expected the configured history cap to preserve bounded truncation framing"
     );
 
     Ok(())
