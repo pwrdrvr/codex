@@ -294,6 +294,11 @@ jobs:
       CODEX_VERSION: ${{ needs.metadata.outputs.version }}
       PLATFORM: ${{ matrix.platform }}
     steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Download macOS signing input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -335,6 +340,8 @@ jobs:
           certificate="$RUNNER_TEMP/pwrdrvr-developer-id.p12"
           keychain="$RUNNER_TEMP/pwrdrvr-release-signing.keychain-db"
           keychain_password="$(openssl rand -hex 32)"
+          host_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/codex-code-mode-host.entitlements.plist"
+          test -f "$host_entitlements"
 
           cleanup() {
             security delete-keychain "$keychain" >/dev/null 2>&1 || true
@@ -360,13 +367,24 @@ jobs:
           security find-identity -v -p codesigning "$keychain" | grep -F "\"${identity}\""
 
           for binary in codex codex-app-server codex-code-mode-host; do
-            codesign \
-              --force \
-              --keychain "$keychain" \
-              --options runtime \
-              --timestamp \
-              --sign "$identity" \
-              "stage/${binary}"
+            if [[ "$binary" == codex-code-mode-host ]]; then
+              codesign \
+                --force \
+                --keychain "$keychain" \
+                --options runtime \
+                --timestamp \
+                --entitlements "$host_entitlements" \
+                --sign "$identity" \
+                "stage/${binary}"
+            else
+              codesign \
+                --force \
+                --keychain "$keychain" \
+                --options runtime \
+                --timestamp \
+                --sign "$identity" \
+                "stage/${binary}"
+            fi
             codesign --verify --all-architectures --strict --verbose=2 "stage/${binary}"
             codesign --display --verbose=4 "stage/${binary}" \
               2> "$RUNNER_TEMP/${binary}-codesign.txt"
@@ -381,6 +399,36 @@ jobs:
           asset="pwragent-codex-${CODEX_VERSION}-${PLATFORM}.tar.gz"
           tar -C stage -czf "$asset" .
           echo "ASSET=$asset" >> "$GITHUB_ENV"
+
+      - name: Verify packaged macOS Code Mode host
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="pwragent-codex-${CODEX_VERSION}-${PLATFORM}.tar.gz"
+          verify_dir="$(mktemp -d)"
+          trap 'rm -rf "$verify_dir"' EXIT
+          tar -C "$verify_dir" -xzf "$asset"
+
+          verified_host="$verify_dir/codex-code-mode-host"
+          expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/codex-code-mode-host.entitlements.plist"
+          actual_entitlements="$verify_dir/codex-code-mode-host.entitlements.plist"
+          normalized_actual="$verify_dir/codex-code-mode-host.entitlements.normalized.plist"
+          normalized_expected="$verify_dir/codex-code-mode-host.entitlements.expected.plist"
+          codesign --verify --all-architectures --strict --verbose=2 "$verified_host"
+          codesign --display --entitlements :- "$verified_host" > "$actual_entitlements"
+          plutil -convert xml1 -o "$normalized_actual" "$actual_entitlements"
+          plutil -convert xml1 -o "$normalized_expected" "$expected_entitlements"
+          diff -u "$normalized_expected" "$normalized_actual"
+          for entitlement_name in \
+            com.apple.security.cs.allow-jit \
+            com.apple.security.cs.allow-unsigned-executable-memory
+          do
+            test "$(/usr/libexec/PlistBuddy -c "Print :$entitlement_name" "$actual_entitlements")" = true
+          done
+
+          if [[ "$PLATFORM" == macos-aarch64 ]]; then
+            python3 scripts/pwragent-release/smoke-code-mode-host.py "$verified_host"
+          fi
 
       - name: Upload signed macOS release asset
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
