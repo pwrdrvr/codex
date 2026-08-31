@@ -401,7 +401,17 @@ impl HttpCodeModeOutputReducer {
 
         // One budget for reduction plus the acceptance callback. Splitting it per
         // stage would let a slow reducer spend the timeout more than once.
+        let reduction_started_at = tokio::time::Instant::now();
         let deadline = tokio::time::Instant::now() + self.config.timeout;
+        tracing::debug!(
+            call_id = %context.call_id,
+            cell_id = %context.cell_id,
+            script_status = %context.script_status,
+            payload_bytes,
+            request_bytes = request_body.len(),
+            timeout_ms = self.config.timeout.as_millis(),
+            "code-mode output reducer request started"
+        );
         let body = tokio::time::timeout_at(deadline, async {
             let mut response = self
                 .client
@@ -417,6 +427,13 @@ impl HttpCodeModeOutputReducer {
                 .ok()?;
 
             let status = response.status();
+            tracing::debug!(
+                call_id = %context.call_id,
+                cell_id = %context.cell_id,
+                %status,
+                elapsed_ms = reduction_started_at.elapsed().as_millis(),
+                "code-mode output reducer response headers received"
+            );
             if !status.is_success() {
                 tracing::warn!(%status, "code-mode output reducer returned an error status");
                 return None;
@@ -466,10 +483,20 @@ impl HttpCodeModeOutputReducer {
         .unwrap_or_else(|_elapsed| {
             tracing::warn!(
                 timeout = ?self.config.timeout,
+                call_id = %context.call_id,
+                cell_id = %context.cell_id,
+                elapsed_ms = reduction_started_at.elapsed().as_millis(),
                 "code-mode output reducer timed out; falling back to truncation"
             );
             None
         })?;
+        tracing::debug!(
+            call_id = %context.call_id,
+            cell_id = %context.cell_id,
+            response_bytes = body.len(),
+            elapsed_ms = reduction_started_at.elapsed().as_millis(),
+            "code-mode output reducer response completed"
+        );
 
         let parsed = serde_json::from_slice::<ReductionResponse>(&body)
             .inspect_err(|error| {
@@ -526,6 +553,13 @@ impl HttpCodeModeOutputReducer {
             deadline,
         )
         .await;
+        tracing::debug!(
+            call_id = %context.call_id,
+            cell_id = %context.cell_id,
+            response_id,
+            elapsed_ms = reduction_started_at.elapsed().as_millis(),
+            "code-mode output reducer replacement selected and acceptance attempted"
+        );
         Some(replacement)
     }
 
