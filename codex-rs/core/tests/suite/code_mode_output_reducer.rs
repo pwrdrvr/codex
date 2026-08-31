@@ -85,6 +85,31 @@ const results = await Promise.all([
 
 text(JSON.stringify({ results, padding: "completed-session-output-".repeat(300) }));
 "#;
+const DEFERRED_TERMINAL_SCRIPT: &str = r#"// @exec: {"yield_time_ms": 1, "max_output_tokens": 4096}
+text("live-output-that-must-not-be-reduced\n".repeat(200));
+yield_control();
+await new Promise(resolve => setTimeout(resolve, 100));
+text("deferred-terminal-raw-output\n".repeat(2_000));
+"#;
+
+struct SelectOriginalTerminalCallReducer;
+
+impl Respond for SelectOriginalTerminalCallReducer {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body: Value = serde_json::from_slice(&request.body).expect("reduction request JSON");
+        if body["script_status"] == "Script completed" && body["call_id"] == "call-1" {
+            return ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "response_id": "deferred-terminal-gate",
+                "replacement": [{
+                    "type": "input_text",
+                    "text": "selected deferred terminal replacement",
+                }],
+            }));
+        }
+
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+    }
+}
 
 struct EchoActionableStateReducer {
     calls: AtomicUsize,
@@ -373,6 +398,7 @@ async fn a_configured_reducer_replaces_what_the_model_reads() -> Result<()> {
     assert_eq!(reductions.len(), 1, "exactly one reduction per cell");
     let body: Value = serde_json::from_slice(&reductions[0].body)?;
     assert_eq!(body["version"], serde_json::json!(1));
+    assert_eq!(body["call_id"], "call-1");
     assert_eq!(body["parent_intent"], CODE_MODE_PARENT_INTENT);
     assert!(
         body["script"]
@@ -390,6 +416,127 @@ async fn a_configured_reducer_replaces_what_the_model_reads() -> Result<()> {
         !body["cell_id"].as_str().unwrap_or_default().is_empty(),
         "the reducer needs a cell id to file the preserved output: {body}"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reducer_replaces_deferred_terminal_wait_output_once_with_original_identity() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let bridge = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(REDUCE_PATH))
+        .respond_with(SelectOriginalTerminalCallReducer)
+        .mount(&bridge)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(ACCEPT_PATH))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&bridge)
+        .await;
+    let descriptor_dir = TempDir::new()?;
+    let descriptor_path = write_descriptor(&descriptor_dir, &bridge);
+
+    let server = responses::start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-parent-intent", CODE_MODE_PARENT_INTENT),
+            ev_custom_tool_call("call-1", "exec", DEFERRED_TERMINAL_SCRIPT),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let yielded_completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-yielded", "waiting"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            config.code_mode.output_reducer = Some(reducer_config(descriptor_path));
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("start a deferred large result").await?;
+    let yielded_request = yielded_completion.single_request();
+    let yielded_output = model_visible_tool_output_for_call(&yielded_request.body_json(), "call-1");
+    let cell_id = yielded_output
+        .strip_prefix("Script running with cell ID ")
+        .and_then(|output| output.lines().next())
+        .expect("initial exec should yield a live cell")
+        .to_string();
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            responses::ev_function_call(
+                "call-2",
+                "wait",
+                &serde_json::to_string(&serde_json::json!({
+                    "cell_id": cell_id,
+                    "yield_time_ms": 5_000,
+                }))?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let terminal_completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-terminal", "done"),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+    test.submit_turn("collect the completed cell").await?;
+
+    let terminal_request = terminal_completion.single_request();
+    let terminal_output = output_text(&terminal_request.function_call_output("call-2")["output"]);
+    assert!(
+        terminal_output.contains("selected deferred terminal replacement"),
+        "the terminal wait delivery should contain the selected replacement: {terminal_output}"
+    );
+    assert!(
+        !terminal_output.contains("deferred-terminal-raw-output"),
+        "the raw terminal output must not reach the model after selection: {terminal_output}"
+    );
+
+    let requests = bridge.received_requests().await.expect("recorded requests");
+    let reductions = requests
+        .iter()
+        .filter(|request| request.url.path() == REDUCE_PATH)
+        .map(|request| serde_json::from_slice::<Value>(&request.body))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        reductions.len(),
+        1,
+        "only the terminal delivery is reducible"
+    );
+    assert_eq!(reductions[0]["call_id"], "call-1");
+    assert_eq!(reductions[0]["cell_id"], cell_id);
+    assert_eq!(reductions[0]["script_status"], "Script completed");
+    assert_eq!(reductions[0]["parent_intent"], CODE_MODE_PARENT_INTENT);
+    let acceptance = requests
+        .iter()
+        .find(|request| request.url.path() == ACCEPT_PATH)
+        .map(|request| serde_json::from_slice::<Value>(&request.body))
+        .transpose()?
+        .expect("selected terminal replacement should be acknowledged");
+    assert_eq!(acceptance["response_id"], "deferred-terminal-gate");
+    assert_eq!(acceptance["call_id"], "call-1");
+    assert_eq!(acceptance["cell_id"], cell_id);
+
     Ok(())
 }
 
