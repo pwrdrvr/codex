@@ -66,6 +66,9 @@ pub(crate) use wait_handler::CodeModeWaitHandler;
 pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
 pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
 pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
+/// Live cells return to the model again at terminal completion, so keep each
+/// interim output item below the repository's 1K-token review threshold.
+const MAX_LIVE_MODEL_VISIBLE_OUTPUT_TOKENS: usize = 768;
 
 /// Returns true for the code-mode `exec` tool in the default namespace.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
@@ -90,7 +93,6 @@ pub(crate) struct CodeModeService {
     /// Original reducer identity per live cell. `wait` resumes a cell it did
     /// not start, so the source and outer call ID have to outlive the `exec`
     /// call that carried them.
-    /// Only populated when a reducer is configured.
     cell_reduction_contexts: Mutex<HashMap<CellId, CellReductionContext>>,
     /// Bounded visible narration keyed by a direct model tool call until the
     /// call starts or reaches PostToolUse.
@@ -251,29 +253,20 @@ impl CodeModeService {
 
     pub(crate) fn refresh_reduction_config(&self, config: &CodeModeConfig) {
         let next = CodeModeReductionRuntimeConfig::from_config(config);
-        if next.output_reducer.is_none()
-            && let Ok(mut contexts) = self.cell_reduction_contexts.lock()
-        {
-            contexts.clear();
-        }
         *self
             .reduction_config
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
     }
 
-    /// Remembers what a cell is running so the reducer can be told. Skipped
-    /// entirely when no reducer is configured, so the default path allocates
-    /// nothing.
+    /// Remembers what a cell is running so a reducer enabled before terminal
+    /// delivery still receives the original identity.
     pub(crate) fn record_cell_reduction_context(
         &self,
         cell_id: &CellId,
         call_id: &str,
         source: &str,
     ) {
-        if self.reduction_config().output_reducer.is_none() {
-            return;
-        }
         if let Ok(mut contexts) = self.cell_reduction_contexts.lock() {
             contexts.insert(
                 cell_id.clone(),
@@ -657,6 +650,12 @@ async fn reduce_code_mode_result(
     max_output_tokens: Option<usize>,
     boundary: ReductionBoundary,
 ) -> Vec<FunctionCallOutputContentItem> {
+    let max_output_tokens = match boundary {
+        ReductionBoundary::Live if reduction_config.output_reducer.is_some() => {
+            Some(resolve_max_tokens(max_output_tokens).min(MAX_LIVE_MODEL_VISIBLE_OUTPUT_TOKENS))
+        }
+        ReductionBoundary::Live | ReductionBoundary::Terminal => max_output_tokens,
+    };
     let reducer = match boundary {
         ReductionBoundary::Live => None,
         ReductionBoundary::Terminal => reduction_config.output_reducer.as_ref(),
@@ -843,8 +842,11 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
+    use super::CodeModeReductionRuntimeConfig;
     use super::CodeModeService;
+    use super::ReductionBoundary;
     use super::build_nested_tool_payload;
+    use super::reduce_code_mode_result;
     use super::reducer::CodeModeOutputReducer;
     use super::reducer::PostToolUseAcceptanceContext;
     use super::reducer::ReductionContext;
@@ -864,7 +866,9 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_protocol::openai_models::ToolMode;
     use codex_tools::ToolName;
+    use codex_utils_output_truncation::approx_token_count;
     use futures::future::BoxFuture;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
 
     #[tokio::test]
@@ -1000,6 +1004,79 @@ mod tests {
                 .read(&cell_id, /*take*/ false)
                 .is_some(),
             "live continuation handles must survive reducer reconfiguration"
+        );
+    }
+
+    #[test]
+    fn cell_reduction_identity_survives_refresh_and_late_enablement() {
+        let enabled = reducer_config();
+        let disabled = CodeModeConfig::default();
+        let cell_id = CellId::new("enabled-cell".to_string());
+        let enabled_service = service(&enabled);
+        enabled_service.record_cell_reduction_context(&cell_id, "exec-call", "text('enabled')");
+
+        enabled_service.refresh_reduction_config(&disabled);
+        enabled_service.refresh_reduction_config(&enabled);
+
+        let retained = enabled_service
+            .cell_reduction_context(&cell_id, ReductionBoundary::Terminal)
+            .expect("an enabled cell must retain its identity across reducer refreshes");
+        assert_eq!(retained.original_call_id.as_ref(), "exec-call");
+        assert_eq!(retained.script.as_ref(), "text('enabled')");
+
+        let late_cell_id = CellId::new("late-enabled-cell".to_string());
+        let late_service = service(&disabled);
+        late_service.record_cell_reduction_context(&late_cell_id, "late-exec-call", "text('late')");
+        late_service.refresh_reduction_config(&enabled);
+
+        let retained = late_service
+            .cell_reduction_context(&late_cell_id, ReductionBoundary::Terminal)
+            .expect("a cell started while disabled must retain identity for later enablement");
+        assert_eq!(retained.original_call_id.as_ref(), "late-exec-call");
+        assert_eq!(retained.script.as_ref(), "text('late')");
+    }
+
+    #[tokio::test]
+    async fn live_output_stays_below_the_model_context_review_threshold() {
+        let reducer = Arc::new(AcceptanceConcurrencyProbe {
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
+        });
+        let config = CodeModeReductionRuntimeConfig {
+            max_output_tokens_ceiling: None,
+            output_reducer: Some(reducer),
+        };
+        let context = ReductionContext {
+            thread_id: "thread-id".to_string(),
+            turn_id: "turn-id".to_string(),
+            call_id: "call-id".to_string(),
+            cell_id: "cell-id".to_string(),
+            script: Some("text('running')".to_string()),
+            parent_intent: None,
+            actionable_state: None,
+            script_status: "Script running with cell ID cell-id".to_string(),
+        };
+        let output = reduce_code_mode_result(
+            &config,
+            &context,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: "live-output ".repeat(8_000),
+            }],
+            Some(10_000),
+            ReductionBoundary::Live,
+        )
+        .await;
+        let output_tokens = output
+            .iter()
+            .map(|item| match item {
+                FunctionCallOutputContentItem::InputText { text } => approx_token_count(text),
+                _ => 0,
+            })
+            .sum::<usize>();
+
+        assert!(
+            output_tokens < 1_000,
+            "live model-visible output must remain below 1K tokens, got {output_tokens}"
         );
     }
 
