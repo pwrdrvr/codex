@@ -175,6 +175,8 @@ for fragment in (
     'tar -C "$verify_dir" -xzf "$asset"',
     'codesign --display --entitlements :- "$verified_host"',
     'python3 scripts/pwragent-release/smoke-code-mode-host.py "$verified_host"',
+    "python3 scripts/pwragent-release/smoke-deferred-code-mode-reducer.py",
+    '"$verify_dir/codex-app-server"',
 ):
     require(macos_sign, fragment, "macos-sign")
 
