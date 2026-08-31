@@ -1,4 +1,5 @@
 use codex_app_server_protocol::CodeModeActionableStateCapability;
+use codex_app_server_protocol::CodeModeDeferredCompletionCapability;
 use codex_app_server_protocol::CodeModeOutputReducerAcceptanceCapability;
 use codex_app_server_protocol::CodeModeOutputReducerCapability;
 use codex_app_server_protocol::CodeModeOutputReducerModelGuidanceCapability;
@@ -54,6 +55,13 @@ pub(crate) fn read_server_capabilities() -> ServerCapabilitiesReadResponse {
                 reducer_response_field: "actionable_state".to_string(),
                 model_output_tag: "codex_actionable_state".to_string(),
             },
+            deferred_completion: CodeModeDeferredCompletionCapability {
+                version: 1,
+                terminal_only: true,
+                preserves_original_call_id: true,
+                preserves_cell_id: true,
+                wait_tool_name: "wait".to_string(),
+            },
             config_key: "features.code_mode.output_reducer".to_string(),
             max_output_tokens_ceiling_config_key: "features.code_mode.max_output_tokens_ceiling"
                 .to_string(),
@@ -94,6 +102,7 @@ pub(crate) fn read_server_capabilities() -> ServerCapabilitiesReadResponse {
             descriptor_environment_variable: "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH"
                 .to_string(),
             descriptor_version: 1,
+            code_mode_nested_post_tool_use: false,
         },
     }
 }
