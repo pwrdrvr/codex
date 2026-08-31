@@ -170,6 +170,10 @@ for fragment in (
     "--timestamp",
     "codesign --verify --all-architectures --strict",
     "TeamIdentifier=${APPLE_TEAM_ID}",
+    ".github/scripts/macos-signing/codex-code-mode-host.entitlements.plist",
+    '--entitlements "$host_entitlements"',
+    'tar -C "$verify_dir" -xzf "$asset"',
+    'codesign --display --entitlements :- "$verified_host"',
 ):
     require(macos_sign, fragment, "macos-sign")
 

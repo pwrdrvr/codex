@@ -82,7 +82,7 @@ impl CodeModeExecuteHandler {
         exec.session
             .services
             .code_mode_service
-            .record_cell_script(&cell_id, args.code.as_str());
+            .record_cell_reduction_context(&cell_id, &call_id, args.code.as_str());
         exec.session
             .services
             .code_mode_service
