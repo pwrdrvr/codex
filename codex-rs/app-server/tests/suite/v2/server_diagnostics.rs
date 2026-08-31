@@ -8,6 +8,7 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodeModeActionableStateCapability;
+use codex_app_server_protocol::CodeModeDeferredCompletionCapability;
 use codex_app_server_protocol::CodeModeOutputReducerAcceptanceCapability;
 use codex_app_server_protocol::CodeModeOutputReducerCapability;
 use codex_app_server_protocol::CodeModeOutputReducerModelGuidanceCapability;
@@ -58,6 +59,20 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
             "modelVisibleOverheadRequestField": "model_visible_overhead_characters",
         })
     );
+    assert_eq!(
+        capabilities_json["codeModeOutputReducer"]["deferredCompletion"],
+        json!({
+            "version": 1,
+            "terminalOnly": true,
+            "preservesOriginalCallId": true,
+            "preservesCellId": true,
+            "waitToolName": "wait",
+        })
+    );
+    assert_eq!(
+        capabilities_json["pwrdrvrTokenMiser"]["codeModeNestedPostToolUse"],
+        false
+    );
 
     assert_eq!(
         capabilities,
@@ -82,6 +97,13 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
                     reducer_request_field: "actionable_state".to_string(),
                     reducer_response_field: "actionable_state".to_string(),
                     model_output_tag: "codex_actionable_state".to_string(),
+                },
+                deferred_completion: CodeModeDeferredCompletionCapability {
+                    version: 1,
+                    terminal_only: true,
+                    preserves_original_call_id: true,
+                    preserves_cell_id: true,
+                    wait_tool_name: "wait".to_string(),
                 },
                 config_key: "features.code_mode.output_reducer".to_string(),
                 max_output_tokens_ceiling_config_key:
@@ -123,6 +145,7 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
                 descriptor_environment_variable: "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH"
                     .to_string(),
                 descriptor_version: 1,
+                code_mode_nested_post_tool_use: false,
             },
         }
     );

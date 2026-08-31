@@ -27,6 +27,7 @@ pub struct PwrdrvrTokenMiserCapability {
     pub thread_resume_field: String,
     pub descriptor_environment_variable: String,
     pub descriptor_version: u32,
+    pub code_mode_nested_post_tool_use: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -40,6 +41,7 @@ pub struct CodeModeOutputReducerCapability {
     pub post_tool_use_field: String,
     pub model_guidance: CodeModeOutputReducerModelGuidanceCapability,
     pub actionable_state: CodeModeActionableStateCapability,
+    pub deferred_completion: CodeModeDeferredCompletionCapability,
     pub config_key: String,
     pub max_output_tokens_ceiling_config_key: String,
     pub post_tool_use_nested_context_field: String,
@@ -48,6 +50,17 @@ pub struct CodeModeOutputReducerCapability {
     pub supports_thread_resume_overrides: bool,
     pub dynamic_tools_resume_field: String,
     pub acceptance: CodeModeOutputReducerAcceptanceCapability,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CodeModeDeferredCompletionCapability {
+    pub version: u32,
+    pub terminal_only: bool,
+    pub preserves_original_call_id: bool,
+    pub preserves_cell_id: bool,
+    pub wait_tool_name: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
