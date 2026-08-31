@@ -4041,6 +4041,35 @@
       ],
       "type": "object"
     },
+    "CodeModeDeferredCompletionCapability": {
+      "properties": {
+        "preservesCellId": {
+          "type": "boolean"
+        },
+        "preservesOriginalCallId": {
+          "type": "boolean"
+        },
+        "terminalOnly": {
+          "type": "boolean"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "waitToolName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "preservesCellId",
+        "preservesOriginalCallId",
+        "terminalOnly",
+        "version",
+        "waitToolName"
+      ],
+      "type": "object"
+    },
     "CodeModeOutputReducerAcceptanceCapability": {
       "properties": {
         "callbackVersion": {
@@ -4081,6 +4110,9 @@
           "format": "uint32",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "deferredCompletion": {
+          "$ref": "#/definitions/CodeModeDeferredCompletionCapability"
         },
         "dynamicToolsResumeField": {
           "type": "string"
@@ -4125,6 +4157,7 @@
         "actionableState",
         "configKey",
         "continuationGuidanceVersion",
+        "deferredCompletion",
         "dynamicToolsResumeField",
         "intentContextVersion",
         "maxOutputTokensCeilingConfigKey",
@@ -13458,6 +13491,9 @@
     },
     "PwrdrvrTokenMiserCapability": {
       "properties": {
+        "codeModeNestedPostToolUse": {
+          "type": "boolean"
+        },
         "descriptorEnvironmentVariable": {
           "type": "string"
         },
@@ -13485,6 +13521,7 @@
         }
       },
       "required": [
+        "codeModeNestedPostToolUse",
         "descriptorEnvironmentVariable",
         "descriptorVersion",
         "identity",

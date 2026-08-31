@@ -10,6 +10,7 @@ use codex_app_server_protocol::PwrdrvrTokenMiserInitializeCapability;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -26,6 +27,19 @@ const ACTIVATION_NONCE: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const BRIDGE_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const ORIGINAL_OUTPUT: &str = "managed-original-output";
 const REPLACEMENT: &str = "managed Token Miser replacement";
+
+fn output_text(output: &Value) -> String {
+    match output {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item["text"].as_str())
+            .collect::<Vec<_>>()
+            .join(""),
+        Value::Object(_) => output_text(&output["content"]),
+        other => other.to_string(),
+    }
+}
 
 fn write_descriptor(directory: &TempDir, bridge: &MockServer) -> Result<std::path::PathBuf> {
     let descriptor_path = directory.path().join("token-miser-bridge-v1.json");
@@ -272,5 +286,101 @@ async fn managed_multibyte_replacement_over_byte_cap_fails_open() -> Result<()> 
     assert!(model_output.contains(ORIGINAL_OUTPUT));
     assert!(!model_output.contains(&"é".repeat(4_000)));
     assert_eq!(bridge_requests.len(), 1);
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_gate_does_not_delay_or_intercept_nested_code_mode_tools() -> Result<()> {
+    let bridge = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/post-tool-use"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)))
+        .mount(&bridge)
+        .await;
+
+    let model_server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &model_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-code-mode-1"),
+                responses::ev_custom_tool_call(
+                    "managed-code-mode-call",
+                    "exec",
+                    r#"// @exec: {"yield_time_ms": 1000}
+const result = await tools.exec_command({ cmd: "printf managed-fast-read", yield_time_ms: 30000 });
+text(result.output);
+"#,
+                ),
+                responses::ev_completed("resp-code-mode-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-code-mode-done", "Done"),
+                responses::ev_completed("resp-code-mode-2"),
+            ]),
+        ],
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&model_server.uri())
+        .with_model("test-gpt-5.1-codex")
+        .enable_feature(Feature::CodeMode)
+        .write(codex_home.path())?;
+    let descriptor_directory = TempDir::new()?;
+    let descriptor_path = write_descriptor(&descriptor_directory, &bridge)?;
+    let descriptor_path = descriptor_path
+        .to_str()
+        .context("descriptor path must be UTF-8")?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[(
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+            Some(descriptor_path),
+        )])
+        .build()
+        .await?;
+    initialize_pwragent(&mut app_server).await?;
+    let started = app_server
+        .start_thread(ThreadStartParams {
+            pwrdrvr_token_miser: Some(PwrdrvrTokenMiserActivation {
+                version: 1,
+                enabled: true,
+            }),
+            ..Default::default()
+        })
+        .await?;
+    app_server
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: started.thread.id,
+            input: vec![UserInput::Text {
+                text: "run the fast Code Mode read".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+
+    let model_requests = response_mock.requests();
+    assert_eq!(model_requests.len(), 2);
+    let output =
+        output_text(&model_requests[1].custom_tool_call_output("managed-code-mode-call")["output"]);
+    assert!(
+        output.contains("Script completed") && output.contains("managed-fast-read"),
+        "a fast nested read must complete in the initial outer cell: {output}"
+    );
+    assert!(
+        !output.contains("Script running with cell ID"),
+        "the managed gate must not push a fast nested read past the outer yield window: {output}"
+    );
+    let bridge_requests = bridge
+        .received_requests()
+        .await
+        .context("bridge request recording is enabled")?;
+    assert!(
+        bridge_requests.is_empty(),
+        "nested Code Mode results are private script inputs, not model-visible gate boundaries"
+    );
+
     Ok(())
 }

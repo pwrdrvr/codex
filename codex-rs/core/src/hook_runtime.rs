@@ -302,10 +302,16 @@ pub(crate) async fn run_post_tool_use_hooks(
         ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => (None, None),
     };
     let matcher_aliases = payload.tool_name.matcher_aliases().to_vec();
-    let managed_gate_enabled = sess
-        .services
-        .code_mode_service
-        .pwrdrvr_token_miser_is_enabled();
+    // Nested Code Mode tool results are private inputs to the running script,
+    // not model-visible delivery boundaries. Running the managed gate here can
+    // push a millisecond command past the outer cell's yield window, while any
+    // selected feedback is intentionally excluded from `code_mode_result`.
+    // The terminal outer result is handled by the generic Code Mode reducer.
+    let managed_gate_enabled = code_mode_cell_id.is_none()
+        && sess
+            .services
+            .code_mode_service
+            .pwrdrvr_token_miser_is_enabled();
     let managed_exact_tool_response = managed_gate_enabled.then(|| payload.tool_response.clone());
     let exact_tool_response = turn_context
         .config

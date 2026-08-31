@@ -87,11 +87,11 @@ pub(crate) struct CodeModeService {
     shutdown_token: CancellationToken,
     /// Runtime-refreshable settings for the script-to-model reduction boundary.
     reduction_config: RwLock<CodeModeReductionRuntimeConfig>,
-    /// Script source per live cell, so a reduction can tell the host what
-    /// produced the output it is summarizing. `wait` resumes a cell it did not
-    /// start, so the source has to outlive the `exec` call that carried it.
+    /// Original reducer identity per live cell. `wait` resumes a cell it did
+    /// not start, so the source and outer call ID have to outlive the `exec`
+    /// call that carried them.
     /// Only populated when a reducer is configured.
-    cell_scripts: Mutex<HashMap<CellId, Arc<str>>>,
+    cell_reduction_contexts: Mutex<HashMap<CellId, CellReductionContext>>,
     /// Bounded visible narration keyed by a direct model tool call until the
     /// call starts or reaches PostToolUse.
     direct_parent_intents: Mutex<HashMap<String, Arc<str>>>,
@@ -110,6 +110,18 @@ pub(crate) struct CodeModeService {
 struct CodeModeReductionRuntimeConfig {
     max_output_tokens_ceiling: Option<usize>,
     output_reducer: Option<Arc<dyn CodeModeOutputReducer>>,
+}
+
+#[derive(Clone)]
+struct CellReductionContext {
+    script: Arc<str>,
+    original_call_id: Arc<str>,
+}
+
+#[derive(Clone, Copy)]
+enum ReductionBoundary {
+    Live,
+    Terminal,
 }
 
 impl CodeModeReductionRuntimeConfig {
@@ -142,7 +154,7 @@ impl CodeModeService {
             default_exec_yield_time_ms: config.default_exec_yield_time_ms,
             shutdown_token: CancellationToken::new(),
             reduction_config: RwLock::new(CodeModeReductionRuntimeConfig::from_config(config)),
-            cell_scripts: Mutex::new(HashMap::new()),
+            cell_reduction_contexts: Mutex::new(HashMap::new()),
             direct_parent_intents: Mutex::new(HashMap::new()),
             cell_parent_intents: Mutex::new(HashMap::new()),
             actionable_states: ActionableStateStore::default(),
@@ -240,9 +252,9 @@ impl CodeModeService {
     pub(crate) fn refresh_reduction_config(&self, config: &CodeModeConfig) {
         let next = CodeModeReductionRuntimeConfig::from_config(config);
         if next.output_reducer.is_none()
-            && let Ok(mut scripts) = self.cell_scripts.lock()
+            && let Ok(mut contexts) = self.cell_reduction_contexts.lock()
         {
-            scripts.clear();
+            contexts.clear();
         }
         *self
             .reduction_config
@@ -253,12 +265,23 @@ impl CodeModeService {
     /// Remembers what a cell is running so the reducer can be told. Skipped
     /// entirely when no reducer is configured, so the default path allocates
     /// nothing.
-    pub(crate) fn record_cell_script(&self, cell_id: &CellId, source: &str) {
+    pub(crate) fn record_cell_reduction_context(
+        &self,
+        cell_id: &CellId,
+        call_id: &str,
+        source: &str,
+    ) {
         if self.reduction_config().output_reducer.is_none() {
             return;
         }
-        if let Ok(mut scripts) = self.cell_scripts.lock() {
-            scripts.insert(cell_id.clone(), Arc::from(source));
+        if let Ok(mut contexts) = self.cell_reduction_contexts.lock() {
+            contexts.insert(
+                cell_id.clone(),
+                CellReductionContext {
+                    script: Arc::from(source),
+                    original_call_id: Arc::from(call_id),
+                },
+            );
         }
     }
 
@@ -313,16 +336,19 @@ impl CodeModeService {
         Some(parent_intent.to_string())
     }
 
-    /// Reads the script for a cell, removing it once the cell can produce no
-    /// more output. A cell that errors before reaching `handle_runtime_response`
-    /// leaves its entry behind until the session ends; the entry is one script
-    /// source, and `interrupt_active_cells` clears the map wholesale.
-    fn cell_script(&self, cell_id: &CellId, take: bool) -> Option<Arc<str>> {
-        let mut scripts = self.cell_scripts.lock().ok()?;
-        if take {
-            scripts.remove(cell_id)
-        } else {
-            scripts.get(cell_id).cloned()
+    /// Reads a cell's original reducer identity, removing it once the cell can
+    /// produce no more output. A cell that errors before reaching
+    /// `handle_runtime_response` leaves one bounded entry until the session
+    /// ends; `interrupt_active_cells` clears the map wholesale.
+    fn cell_reduction_context(
+        &self,
+        cell_id: &CellId,
+        boundary: ReductionBoundary,
+    ) -> Option<CellReductionContext> {
+        let mut contexts = self.cell_reduction_contexts.lock().ok()?;
+        match boundary {
+            ReductionBoundary::Live => contexts.get(cell_id).cloned(),
+            ReductionBoundary::Terminal => contexts.remove(cell_id),
         }
     }
 
@@ -371,8 +397,8 @@ impl CodeModeService {
     }
 
     pub(crate) async fn interrupt_active_cells(&self) {
-        if let Ok(mut scripts) = self.cell_scripts.lock() {
-            scripts.clear();
+        if let Ok(mut contexts) = self.cell_reduction_contexts.lock() {
+            contexts.clear();
         }
         if let Ok(mut intents) = self.direct_parent_intents.lock() {
             intents.clear();
@@ -495,11 +521,16 @@ pub(super) async fn handle_runtime_response(
     // A yielded cell can produce more output, so keep its script; anything else
     // is finished with it.
     let is_terminal = !matches!(response, RuntimeResponse::Yielded { .. });
+    let boundary = if is_terminal {
+        ReductionBoundary::Terminal
+    } else {
+        ReductionBoundary::Live
+    };
     let service = &exec.session.services.code_mode_service;
     let reduction_config = service.reduction_config();
     let reduction_enabled = reduction_config.output_reducer.is_some();
     // Scoped so the borrow of `response` ends before the match below moves it.
-    let (cell_id, script, parent_intent, actionable_state) = {
+    let (cell_id, original_call_id, script, parent_intent, actionable_state) = {
         let cell_id = response_cell_id(&response);
         let parent_intent = {
             let mut intents = service.cell_parent_intents.lock().ok();
@@ -511,25 +542,35 @@ pub(super) async fn handle_runtime_response(
                     .and_then(|intents| intents.get(cell_id).cloned())
             }
         };
-        let script = service.cell_script(cell_id, is_terminal);
+        let cell_reduction_context = service.cell_reduction_context(cell_id, boundary);
         let actionable_state = service.actionable_states.read(cell_id, is_terminal);
-        let (script, parent_intent, actionable_state) = if reduction_enabled {
+        let (original_call_id, script, parent_intent, actionable_state) = if reduction_enabled {
             (
-                script.map(|script| script.to_string()),
+                cell_reduction_context
+                    .as_ref()
+                    .map(|context| context.original_call_id.to_string())
+                    .unwrap_or_else(|| call_id.to_string()),
+                cell_reduction_context.map(|context| context.script.to_string()),
                 parent_intent.map(|parent_intent| parent_intent.to_string()),
                 actionable_state,
             )
         } else {
-            (None, None, None)
+            (call_id.to_string(), None, None, None)
         };
-        (cell_id.to_string(), script, parent_intent, actionable_state)
+        (
+            cell_id.to_string(),
+            original_call_id,
+            script,
+            parent_intent,
+            actionable_state,
+        )
     };
     // The script-to-model boundary: everything below is what enters model context, as opposed to
     // the nested-tool result in `call_nested_tool`, which is returned into the running script.
     let context = ReductionContext {
         thread_id: exec.session.thread_id.to_string(),
         turn_id: exec.turn.sub_id.clone(),
-        call_id: call_id.to_string(),
+        call_id: original_call_id,
         // Summarizing a wall of text is guesswork without knowing it came from,
         // say, a `rg --files` invocation, so hand the reducer the program that
         // produced it.
@@ -539,6 +580,15 @@ pub(super) async fn handle_runtime_response(
         cell_id,
         script_status: script_status.clone(),
     };
+    tracing::debug!(
+        current_call_id = call_id,
+        original_call_id = %context.call_id,
+        cell_id = %context.cell_id,
+        is_terminal,
+        deferred_delivery = call_id != context.call_id,
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "code-mode runtime response reached the model-visible delivery boundary"
+    );
 
     match response {
         RuntimeResponse::Yielded { content_items, .. } => {
@@ -549,6 +599,7 @@ pub(super) async fn handle_runtime_response(
                 &context,
                 content_items,
                 max_output_tokens,
+                ReductionBoundary::Live,
             )
             .await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
@@ -562,6 +613,7 @@ pub(super) async fn handle_runtime_response(
                 &context,
                 content_items,
                 max_output_tokens,
+                ReductionBoundary::Terminal,
             )
             .await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
@@ -585,6 +637,7 @@ pub(super) async fn handle_runtime_response(
                 &context,
                 content_items,
                 max_output_tokens,
+                ReductionBoundary::Terminal,
             )
             .await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
@@ -602,15 +655,30 @@ async fn reduce_code_mode_result(
     context: &ReductionContext,
     content_items: Vec<FunctionCallOutputContentItem>,
     max_output_tokens: Option<usize>,
+    boundary: ReductionBoundary,
 ) -> Vec<FunctionCallOutputContentItem> {
-    apply_output_reduction(
-        reduction_config.output_reducer.as_ref(),
+    let reducer = match boundary {
+        ReductionBoundary::Live => None,
+        ReductionBoundary::Terminal => reduction_config.output_reducer.as_ref(),
+    };
+    let reduction_started_at = std::time::Instant::now();
+    let reduced = apply_output_reduction(
+        reducer,
         context,
         content_items,
         max_output_tokens,
         reduction_config.max_output_tokens_ceiling,
     )
-    .await
+    .await;
+    tracing::debug!(
+        call_id = %context.call_id,
+        cell_id = %context.cell_id,
+        is_terminal = matches!(boundary, ReductionBoundary::Terminal),
+        reducer_enabled = reducer.is_some(),
+        elapsed_ms = reduction_started_at.elapsed().as_millis(),
+        "code-mode model-visible reduction boundary completed"
+    );
+    reduced
 }
 
 fn response_cell_id(response: &RuntimeResponse) -> &CellId {

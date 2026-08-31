@@ -60,6 +60,7 @@ export type { ChatgptAuthTokensRefreshReason } from "./ChatgptAuthTokensRefreshR
 export type { ChatgptAuthTokensRefreshResponse } from "./ChatgptAuthTokensRefreshResponse";
 export type { CliAuthCredentialsStoreMode } from "./CliAuthCredentialsStoreMode";
 export type { CodeModeActionableStateCapability } from "./CodeModeActionableStateCapability";
+export type { CodeModeDeferredCompletionCapability } from "./CodeModeDeferredCompletionCapability";
 export type { CodeModeOutputReducerAcceptanceCapability } from "./CodeModeOutputReducerAcceptanceCapability";
 export type { CodeModeOutputReducerCapability } from "./CodeModeOutputReducerCapability";
 export type { CodeModeOutputReducerModelGuidanceCapability } from "./CodeModeOutputReducerModelGuidanceCapability";
