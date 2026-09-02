@@ -6,8 +6,9 @@
 # GitHub-hosted runners only and signs with PwrDrvr credentials held in the
 # `apple-signing` and `windows-signing` environments.
 #
-# Signing is fail-closed: the signing jobs have no fallback to an unsigned
-# asset, and `release-candidate` requires both of them.
+# Signing and macOS notarization are fail-closed: the protected jobs have no
+# fallback to an unsigned or unnotarized asset, and `release-candidate`
+# requires both platform signers.
 #
 # To exercise the signing path on a pull request, apply the `ci:release-signing`
 # label. To publish, push a `pwragent-v*` tag.
@@ -285,7 +286,7 @@ jobs:
           - macos-aarch64
           - macos-x86_64
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 60
     environment: apple-signing
     permissions:
       contents: read
@@ -392,6 +393,19 @@ jobs:
             grep -Fx "TeamIdentifier=${APPLE_TEAM_ID}" "$RUNNER_TEMP/${binary}-codesign.txt"
           done
 
+      - name: Notarize exact signed macOS binaries
+        env:
+          # Base64-encoded App Store Connect Team API key (.p8), Key ID, and
+          # Issuer ID. Store all three only on the apple-signing environment.
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        shell: bash
+        run: |
+          scripts/pwragent-release/notarize-macos-binaries.sh \
+            stage \
+            "$RUNNER_TEMP/${PLATFORM}-notarized-binaries.sha256"
+
       - name: Package signed macOS distribution
         shell: bash
         run: |
@@ -400,7 +414,7 @@ jobs:
           tar -C stage -czf "$asset" .
           echo "ASSET=$asset" >> "$GITHUB_ENV"
 
-      - name: Verify packaged macOS Code Mode host
+      - name: Verify packaged macOS distribution
         shell: bash
         run: |
           set -euo pipefail
@@ -408,6 +422,44 @@ jobs:
           verify_dir="$(mktemp -d)"
           trap 'rm -rf "$verify_dir"' EXIT
           tar -C "$verify_dir" -xzf "$asset"
+
+          # This proves the published tarball contains the exact signed bytes
+          # included in the Accepted notarization submission.
+          (
+            cd "$verify_dir"
+            shasum -a 256 --check \
+              "$RUNNER_TEMP/${PLATFORM}-notarized-binaries.sha256"
+          )
+
+          assess_gatekeeper() {
+            local binary_path="$1"
+            local assessment=""
+            for attempt in 1 2 3 4 5 6; do
+              if assessment="$(spctl --assess --type execute --verbose=4 \
+                "$binary_path" 2>&1)" \
+                && grep -Fq "source=Notarized Developer ID" <<< "$assessment"
+              then
+                printf '%s\n' "$assessment"
+                return 0
+              fi
+              if [[ "$attempt" -lt 6 ]]; then
+                sleep 10
+              fi
+            done
+            printf '%s\n' "$assessment" >&2
+            echo "::error::Gatekeeper did not recognize $(basename "$binary_path") as Notarized Developer ID." >&2
+            return 1
+          }
+
+          for binary in codex codex-app-server codex-code-mode-host; do
+            codesign --verify --all-architectures --strict --verbose=2 \
+              "$verify_dir/$binary"
+            assess_gatekeeper "$verify_dir/$binary"
+          done
+
+          # Raw Mach-O files and ZIP/tar archives are not stapler-supported.
+          # notarytool's Accepted result is authoritative; spctl additionally
+          # verifies Gatekeeper can retrieve the ticket for each exact binary.
 
           verified_host="$verify_dir/codex-code-mode-host"
           expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/codex-code-mode-host.entitlements.plist"

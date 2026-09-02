@@ -125,16 +125,45 @@ Identity: `Developer ID Application: PwrDrvr LLC (T44CNHC4UH)`.
 | --- | --- |
 | `CSC_LINK` | Base64-encoded Developer ID Application `.p12`, optionally with the `data:application/x-pkcs12;base64,` prefix |
 | `CSC_KEY_PASSWORD` | Export password for that `.p12` |
+| `APPLE_NOTARY_KEY` | Base64-encoded App Store Connect Team API private key (`.p8`) |
+| `APPLE_NOTARY_KEY_ID` | App Store Connect Team API Key ID |
+| `APPLE_NOTARY_ISSUER_ID` | App Store Connect Team API Issuer ID |
 
-Every mach-O in the archive is signed with `--options runtime --timestamp`, then
-verified: `codesign --verify --all-architectures --strict`, plus an exact-match
-check on both `Authority=` and `TeamIdentifier=`.
+Every Mach-O in the archive is signed with `--options runtime --timestamp`, then
+verified with `codesign --verify --all-architectures --strict`, plus an
+exact-match check on both `Authority=` and `TeamIdentifier=`. The protected job
+then puts those exact signed bytes in a temporary ZIP, submits it with
+`xcrun notarytool submit --wait`, and requires Apple's final status to be
+`Accepted`. The ZIP exists only because Apple accepts ZIP, DMG, and signed flat
+PKG submission containers; the published files remain the existing per-arch
+`.tar.gz` assets.
 
-These binaries are **signed but not notarized**. They are intended to be nested
-inside a PwrDrvr application bundle that is itself notarized, which works
-because the nested code carries the same Team ID and hardened runtime. Shipping
-one of these binaries standalone to end users would need a notarization step
-that does not exist here yet.
+The App Store Connect Team API key must belong to team `T44CNHC4UH`, be enabled
+for notarization, and be stored with its Key ID and Issuer ID as secrets on the
+protected `apple-signing` GitHub Environment. The private key is decoded into an
+ephemeral mode-0600 file and deleted before the job exits. GitHub Environment
+deployment protection rules should restrict access to trusted release refs and
+reviewers.
+
+Notarization does not modify a standalone Mach-O. Before submission the workflow
+records each binary's SHA-256, and it checks those digests both after Apple
+accepts the submission and after extracting the release tarball. It separately
+checks four properties:
+
+- `codesign` verifies Developer ID signature validity and hardened-runtime
+  signing.
+- `notarytool` verifies that Apple accepted the submitted bytes; any other
+  status fails closed before packaging.
+- `spctl` verifies Gatekeeper assesses each packaged binary as
+  `Notarized Developer ID`, with bounded retries for ticket propagation.
+- Stapling is unavailable for these artifacts: Apple's `stapler` supports UDIF
+  disk images, code-signed executable bundles, and signed flat installer
+  packages. A raw standalone Mach-O and ZIP/tar archives cannot be stapled, so
+  Gatekeeper retrieves the notarization ticket online.
+
+The release-policy check is offline and only enforces this workflow contract;
+ordinary CI never submits to Apple's live notarization service. A labeled
+`ci:release-signing` PR or `pwragent-v*` tag exercises the protected live path.
 
 ### Windows — Azure Trusted Signing, `windows-signing` environment
 
@@ -163,7 +192,15 @@ the presence of an RFC 3161 timestamp.
 `pwrdrvr/grok-build` carries `scripts/release/upload-csc-link-from-1password.sh`,
 which reads the Developer ID `.p12` out of 1Password and pushes it to a repo's
 `apple-signing` environment. It takes the repository from `GITHUB_REPOSITORY`,
-so it can populate this repo without being copied here.
+so it can populate this repo without being copied here. That helper only loads
+`CSC_LINK` and `CSC_KEY_PASSWORD`; it does not configure notarization.
+
+For notarization, create an App Store Connect Team API key for PwrDrvr's
+provider, retain the downloaded `.p8`, and configure the three
+`APPLE_NOTARY_*` secrets listed above in the repository's `apple-signing`
+environment. Protect that environment with trusted-branch/tag and required-
+reviewer rules. A release-signing run deliberately fails before packaging if
+any credential is absent, invalid, or unable to produce an `Accepted` result.
 
 ## Why the pipeline is split into prepare and sign jobs
 
