@@ -26,6 +26,7 @@ UPSTREAM_VERSION_PATH = ROOT / "scripts/pwragent-release/upstream-version.txt"
 WINDOWS_SIGNING_VERIFIER_PATH = (
     ROOT / "scripts/pwragent-release/verify-trusted-signing-tools.ps1"
 )
+MACOS_NOTARIZER_PATH = ROOT / "scripts/pwragent-release/notarize-macos-binaries.sh"
 RUNBOOK_PATH = ROOT / "docs/pwragent-distribution.md"
 
 # Every executable the downstream distribution ships and therefore must sign.
@@ -66,6 +67,7 @@ unsigned_workflow = UNSIGNED_WORKFLOW_PATH.read_text(encoding="utf-8")
 windows_signer = WINDOWS_SIGNER_PATH.read_text(encoding="utf-8")
 windows_signing_preparer = WINDOWS_SIGNING_PREPARER_PATH.read_text(encoding="utf-8")
 windows_signing_verifier = WINDOWS_SIGNING_VERIFIER_PATH.read_text(encoding="utf-8")
+macos_notarizer = MACOS_NOTARIZER_PATH.read_text(encoding="utf-8")
 upstream_version = UPSTREAM_VERSION_PATH.read_text(encoding="utf-8").strip()
 
 try:
@@ -174,8 +176,18 @@ for fragment in (
     '--entitlements "$host_entitlements"',
     'tar -C "$verify_dir" -xzf "$asset"',
     'codesign --display --entitlements :- "$verified_host"',
+    "APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}",
+    "APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}",
+    "APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}",
+    "scripts/pwragent-release/notarize-macos-binaries.sh",
+    '"$RUNNER_TEMP/${PLATFORM}-notarized-binaries.sha256"',
+    "source=Notarized Developer ID",
+    "spctl --assess --type execute --verbose=4",
 ):
     require(macos_sign, fragment, "macos-sign")
+
+for platform in ("macos-aarch64", "macos-x86_64"):
+    require(macos_sign, f"- {platform}", "macos-sign matrix")
 
 # Every shipped mach-O has to go through codesign, not just the CLI entrypoint.
 require(
@@ -183,6 +195,49 @@ require(
     "for binary in " + " ".join(UNIX_BINARIES) + "; do",
     "macos-sign",
 )
+
+for fragment in (
+    "APPLE_NOTARY_KEY is required",
+    "APPLE_NOTARY_KEY_ID is required",
+    "APPLE_NOTARY_ISSUER_ID is required",
+    "binaries=(codex codex-app-server codex-code-mode-host)",
+    "/usr/bin/ditto -c -k --keepParent",
+    "xcrun notarytool submit",
+    '--key "$api_key"',
+    '--key-id "$APPLE_NOTARY_KEY_ID"',
+    '--issuer "$APPLE_NOTARY_ISSUER_ID"',
+    "--wait",
+    "--timeout 45m",
+    "--output-format json",
+    '.status == "Accepted"',
+    "shasum -a 256 --check",
+):
+    require(macos_notarizer, fragment, "macOS notarization script")
+
+if MACOS_NOTARIZER_PATH.stat().st_mode & 0o111 == 0:
+    fail("macOS notarization script must be executable")
+
+for secret_name in (
+    "APPLE_NOTARY_KEY",
+    "APPLE_NOTARY_KEY_ID",
+    "APPLE_NOTARY_ISSUER_ID",
+):
+    secret_reference = "${{ secrets." + secret_name + " }}"
+    if workflow.count(secret_reference) != 1:
+        fail(f"{secret_name} must be read exactly once by the protected macOS job")
+
+macos_binary_loop = "for binary in " + " ".join(UNIX_BINARIES) + "; do"
+if macos_sign.count(macos_binary_loop) < 2:
+    fail("every macOS binary must be verified both before and after notarization")
+
+if "stapler staple" in macos_sign or "stapler staple" in macos_notarizer:
+    fail("standalone Mach-O files and ZIP/tar archives must not be stapled")
+
+notarize_position = macos_sign.find("name: Notarize exact signed macOS binaries")
+package_position = macos_sign.find("name: Package signed macOS distribution")
+upload_position = macos_sign.find("name: Upload signed macOS release asset")
+if not 0 <= notarize_position < package_position < upload_position:
+    fail("macOS notarization must complete before packaging and upload")
 
 for fragment in (
     "startsWith(github.ref, 'refs/tags/pwragent-v')",
@@ -334,6 +389,13 @@ for fragment in (
     "Developer ID Application: PwrDrvr LLC (T44CNHC4UH)",
     "`CSC_LINK`",
     "`CSC_KEY_PASSWORD`",
+    "`APPLE_NOTARY_KEY`",
+    "`APPLE_NOTARY_KEY_ID`",
+    "`APPLE_NOTARY_ISSUER_ID`",
+    "App Store Connect Team API key",
+    "notarytool",
+    "Notarized Developer ID",
+    "cannot be stapled",
     "`WIN_AZURE_SIGN_ACCOUNT` | `pwrdrvrsigning`",
     "`WIN_AZURE_SIGN_ENDPOINT` | `https://eus.codesigning.azure.net/`",
     "`WIN_AZURE_SIGN_PUBLISHER_NAME` | `PwrDrvr LLC`",
