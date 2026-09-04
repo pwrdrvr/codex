@@ -31,6 +31,9 @@ pub use codex_history::ResponseItemEnvelope;
 pub use codex_history::ResumedHistory;
 pub use codex_history::RolloutItem;
 pub use codex_history::RolloutLine;
+pub use codex_history::TokenMiserDecisionRecord;
+pub use codex_history::TokenMiserOutput;
+pub use codex_history::TokenMiserStoredOutcome;
 pub(crate) use codex_protocol::protocol;
 
 /// Decodes a persisted rollout record without Serde's flattened-envelope buffering.

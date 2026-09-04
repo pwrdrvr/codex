@@ -1,6 +1,8 @@
 use anyhow::Result;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
 
 use super::*;
 
@@ -58,6 +60,51 @@ fn response_item_rollout_line_preserves_shape() -> Result<()> {
     assert!(matches!(&envelope.item, ResponseItem::Message { .. }));
     assert_eq!(envelope.metadata, None);
     assert_eq!(serde_json::to_value(line)?, legacy_line);
+    Ok(())
+}
+
+#[test]
+fn token_miser_output_round_trips_exact_structured_content_without_clone_amplification()
+-> Result<()> {
+    let thread_id = codex_protocol::ThreadId::from_string("00000000-0000-0000-0000-000000000042")?;
+    let line = RolloutLine {
+        timestamp: "2025-01-03T12:00:00.000Z".to_string(),
+        ordinal: Some(8),
+        item: RolloutItem::TokenMiserOutput(Arc::new(TokenMiserOutput {
+            version: 1,
+            object_id: "unguessable-object-id".to_string(),
+            thread_id,
+            turn_id: "turn-1".to_string(),
+            call_id: "call-1".to_string(),
+            cell_id: "cell-1".to_string(),
+            script_status: "Script completed".to_string(),
+            success: Some(true),
+            content_items: vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "line one\nline two\0".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,AAEC".to_string(),
+                    detail: Some(codex_protocol::models::ImageDetail::Original),
+                },
+                FunctionCallOutputContentItem::EncryptedContent {
+                    encrypted_content: "opaque-ciphertext".to_string(),
+                },
+            ],
+        })),
+    };
+    let cloned_item = line.item.clone();
+    let (RolloutItem::TokenMiserOutput(original), RolloutItem::TokenMiserOutput(cloned)) =
+        (&line.item, &cloned_item)
+    else {
+        panic!("expected Token Miser output items");
+    };
+    assert!(Arc::ptr_eq(original, cloned));
+
+    let encoded = serde_json::to_vec(&line)?;
+    let restored = serde_json::from_slice::<RolloutLine>(&encoded)?;
+
+    assert_eq!(serde_json::to_vec(&restored)?, encoded);
     Ok(())
 }
 
@@ -391,7 +438,7 @@ fn rollout_item_variants_preserve_existing_payload_shapes() -> Result<()> {
 fn rollout_item_schema_matches_tagged_payload_and_sibling_metadata() -> Result<()> {
     let schema = serde_json::to_value(schemars::schema_for!(RolloutItem))?;
     let variants = schema["oneOf"].as_array().expect("rollout variants");
-    assert_eq!(variants.len(), 10);
+    assert_eq!(variants.len(), 12);
 
     for variant in variants {
         let required = variant["required"].as_array().expect("required fields");

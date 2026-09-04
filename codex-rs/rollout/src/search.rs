@@ -293,6 +293,8 @@ fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::Compacted(_)
         | RolloutItem::RealtimeItem(_)
+        | RolloutItem::TokenMiserOutput(_)
+        | RolloutItem::TokenMiserDecision(_)
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::WorldState(_) => None,
     }

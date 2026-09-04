@@ -305,6 +305,8 @@ impl ThreadMetadataSync {
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::Compacted(_)
                 | RolloutItem::RealtimeItem(_)
+                | RolloutItem::TokenMiserOutput(_)
+                | RolloutItem::TokenMiserDecision(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::WorldState(_) => {}
             }

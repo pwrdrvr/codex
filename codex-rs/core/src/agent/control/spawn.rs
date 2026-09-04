@@ -89,6 +89,8 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
             | ResponseItem::Other => false,
         },
         RolloutItem::RealtimeItem(_)
+        | RolloutItem::TokenMiserOutput(_)
+        | RolloutItem::TokenMiserDecision(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::SecurityRiskScore(_) => false,
@@ -1007,7 +1009,9 @@ impl AgentControl {
                     }
                     true
                 }
-                RolloutItem::RealtimeItem(_) => false,
+                RolloutItem::RealtimeItem(_)
+                | RolloutItem::TokenMiserOutput(_)
+                | RolloutItem::TokenMiserDecision(_) => false,
                 RolloutItem::EventMsg(_)
                 | RolloutItem::SessionMeta(_)
                 | RolloutItem::TurnContext(_)
@@ -1256,3 +1260,7 @@ impl AgentControl {
         Ok((resumed_thread.thread_id, multi_agent_version))
     }
 }
+
+#[cfg(test)]
+#[path = "spawn_tests.rs"]
+mod tests;

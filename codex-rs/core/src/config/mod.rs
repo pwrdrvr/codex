@@ -1135,6 +1135,19 @@ pub const DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE: &str = concat!(
 );
 /// Hard cap for each consumer-provided model-guidance string.
 pub const CODE_MODE_REDUCER_GUIDANCE_MAX_CHARACTERS: usize = 512;
+pub const DEFAULT_TOKEN_MISER_MODEL: &str = "gpt-5.6-luna";
+pub const DEFAULT_TOKEN_MISER_TIMEOUT_MS: u64 = 20_000;
+/// Complete framed reducer input, including ContextualUserFragment markers. A byte can contribute
+/// at most one token, so 896 bytes stays below the 1K-token review threshold and the 10K hard cap.
+pub const DEFAULT_TOKEN_MISER_MAX_INPUT_BYTES: usize = 896;
+pub const TOKEN_MISER_MAX_INPUT_BYTES: usize = 896;
+pub const DEFAULT_TOKEN_MISER_MAX_REPLACEMENT_BYTES: usize = 4 * 1024;
+pub const TOKEN_MISER_MAX_REPLACEMENT_BYTES: usize = 8 * 1024;
+pub const TOKEN_MISER_TOOL_DESCRIPTION_GUIDANCE: &str = concat!(
+    "Terminal output may be replaced by a bounded Token Miser receipt. Exact retained output can ",
+    "be read with tools.read_token_miser_output or located with ",
+    "tools.search_token_miser_output using the receipt's object_id."
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CodeModeConfig {
@@ -1149,6 +1162,17 @@ pub struct CodeModeConfig {
     pub max_output_tokens_ceiling: Option<usize>,
     /// Optional out-of-process reducer applied at the script-to-model boundary.
     pub output_reducer: Option<CodeModeOutputReducerConfig>,
+    /// Optional in-process reducer. When present it deterministically takes precedence over the
+    /// managed external reducer.
+    pub token_miser: Option<InProcessTokenMiserConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InProcessTokenMiserConfig {
+    pub model: String,
+    pub timeout: Duration,
+    pub max_reducer_input_bytes: usize,
+    pub max_replacement_bytes: usize,
 }
 
 /// Resolved settings for the optional external code-mode output reducer.
@@ -1176,6 +1200,7 @@ impl Default for CodeModeConfig {
             disable_in_process_fallback: false,
             max_output_tokens_ceiling: None,
             output_reducer: None,
+            token_miser: None,
         }
     }
 }
@@ -2745,7 +2770,41 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
         output_reducer: base
             .and_then(|config| config.output_reducer.as_ref())
             .and_then(resolve_code_mode_output_reducer_config),
+        token_miser: base
+            .and_then(|config| config.token_miser.as_ref())
+            .and_then(resolve_in_process_token_miser_config),
     }
+}
+
+fn resolve_in_process_token_miser_config(
+    config: &codex_features::InProcessTokenMiserConfigToml,
+) -> Option<InProcessTokenMiserConfig> {
+    if config.enabled != Some(true) {
+        return None;
+    }
+    let timeout_ms = config
+        .timeout_ms
+        .filter(|timeout_ms| *timeout_ms > 0)
+        .unwrap_or(DEFAULT_TOKEN_MISER_TIMEOUT_MS);
+    Some(InProcessTokenMiserConfig {
+        model: config
+            .model
+            .as_deref()
+            .filter(|model| !model.trim().is_empty())
+            .unwrap_or(DEFAULT_TOKEN_MISER_MODEL)
+            .to_string(),
+        timeout: Duration::from_millis(timeout_ms),
+        max_reducer_input_bytes: config
+            .max_reducer_input_bytes
+            .filter(|bytes| *bytes > 0)
+            .unwrap_or(DEFAULT_TOKEN_MISER_MAX_INPUT_BYTES)
+            .min(TOKEN_MISER_MAX_INPUT_BYTES),
+        max_replacement_bytes: config
+            .max_replacement_bytes
+            .filter(|bytes| *bytes > 0)
+            .unwrap_or(DEFAULT_TOKEN_MISER_MAX_REPLACEMENT_BYTES)
+            .min(TOKEN_MISER_MAX_REPLACEMENT_BYTES),
+    })
 }
 
 /// The reducer stays inert until the host names a descriptor file; every other knob has a default.

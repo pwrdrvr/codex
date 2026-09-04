@@ -45,6 +45,7 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::codex_delegate::DelegateUserInstructions;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -862,6 +863,7 @@ async fn spawn_guardian_review_session(
         parent_context.environments().clone(),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
+        DelegateUserInstructions::Inherit,
         initial_history,
         GitEnrichmentPolicy::Skip,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,

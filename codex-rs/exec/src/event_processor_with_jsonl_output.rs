@@ -119,6 +119,7 @@ impl EventProcessorWithJsonOutput {
             return Usage::default();
         };
         Usage {
+            total_tokens: usage.total.total_tokens,
             input_tokens: usage.total.input_tokens,
             cached_input_tokens: usage.total.cached_input_tokens,
             cache_write_input_tokens: usage.total.cache_write_input_tokens,

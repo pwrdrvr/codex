@@ -387,6 +387,16 @@ impl ContextManager {
         );
     }
 
+    /// Adds incurred usage that did not contribute to the parent model's context window.
+    pub(crate) fn add_background_token_usage(&mut self, usage: &TokenUsage) {
+        let info = self.token_info.get_or_insert_with(|| TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: None,
+        });
+        info.total_token_usage.add_assign(usage);
+    }
+
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {
         // Get reasoning items excluding all the ones after the last instruction boundary.
         let Some(last_user_index) = self

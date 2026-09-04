@@ -245,7 +245,9 @@ fn source_model_items(items: &[RolloutItem]) -> Option<Vec<SourceModelItem<'_>>>
             | RolloutItem::TurnContext(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::WorldState(_) => return None,
-            RolloutItem::EventMsg(_) => {}
+            RolloutItem::TokenMiserOutput(_)
+            | RolloutItem::TokenMiserDecision(_)
+            | RolloutItem::EventMsg(_) => {}
         }
     }
     Some(model_items)
@@ -258,6 +260,8 @@ fn history_model_items(items: &[RolloutItem]) -> Option<Vec<&ResponseItem>> {
             RolloutItem::SessionMeta(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::RealtimeItem(_)
+            | RolloutItem::TokenMiserOutput(_)
+            | RolloutItem::TokenMiserDecision(_)
             | RolloutItem::SecurityRiskScore(_) => {}
             RolloutItem::ResponseItem(response_item) => model_items.push(&response_item.item),
             RolloutItem::EventMsg(

@@ -645,6 +645,63 @@ enabled = true
 }
 
 #[tokio::test]
+async fn load_config_resolves_explicit_nested_token_miser_settings() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"
+[features.code_mode]
+enabled = true
+
+[features.code_mode.token_miser]
+enabled = true
+model = "test-luna"
+timeout_ms = 3210
+max_reducer_input_bytes = 999999
+max_replacement_bytes = 999999
+"#,
+    )
+    .expect("nested Token Miser config should deserialize");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.code_mode.token_miser,
+        Some(InProcessTokenMiserConfig {
+            model: "test-luna".to_string(),
+            timeout: Duration::from_millis(3_210),
+            max_reducer_input_bytes: TOKEN_MISER_MAX_INPUT_BYTES,
+            max_replacement_bytes: TOKEN_MISER_MAX_REPLACEMENT_BYTES,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn token_miser_requires_explicit_enabled_true() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"
+[features.code_mode.token_miser]
+model = "test-luna"
+"#,
+    )
+    .expect("disabled Token Miser config should deserialize");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.code_mode.token_miser, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_code_mode_output_reducer() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     let descriptor_path = codex_home.abs().join("token-miser/bridge.json");

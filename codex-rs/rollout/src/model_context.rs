@@ -57,6 +57,12 @@ pub struct ModelContextScan {
 impl ModelContextScan {
     /// Adds the next newest-to-oldest rollout item and reports whether the reader can stop.
     pub fn push(&mut self, item: RolloutItem) -> ModelContextScanProgress {
+        if matches!(
+            item,
+            RolloutItem::TokenMiserOutput(_) | RolloutItem::TokenMiserDecision(_)
+        ) {
+            return ModelContextScanProgress::Continue;
+        }
         let progress = self.observe(&item);
         self.items_newest_first.push(item);
         progress
@@ -154,6 +160,8 @@ impl ModelContextScan {
             | RolloutItem::SessionMeta(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::RealtimeItem(_)
+            | RolloutItem::TokenMiserOutput(_)
+            | RolloutItem::TokenMiserDecision(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::WorldState(_) => {}
         }
