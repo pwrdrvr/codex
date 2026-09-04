@@ -61,6 +61,7 @@ mod code_mode_elicitation;
 mod code_mode_model_messages;
 mod code_mode_output_reducer;
 mod codex_apps_protocol;
+mod in_process_token_miser;
 mod codex_delegate;
 mod collaboration_instructions;
 mod compact;
