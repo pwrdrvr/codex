@@ -53,6 +53,7 @@ mod cloud_config;
 mod code_mode;
 mod code_mode_elicitation;
 mod code_mode_output_reducer;
+mod in_process_token_miser;
 mod codex_delegate;
 mod collaboration_instructions;
 mod compact;
