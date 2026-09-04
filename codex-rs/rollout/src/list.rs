@@ -1180,6 +1180,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::RealtimeItem(_) => {
                 // Realtime presentation does not affect model-visible thread summaries.
             }
+            RolloutItem::TokenMiserOutput(_) | RolloutItem::TokenMiserDecision(_) => {
+                // Exact retained tool output is internal and never contributes to a preview.
+            }
             RolloutItem::Compacted(_) => {
                 // Not included in `head`; skip.
             }
@@ -1251,6 +1254,8 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::WorldState(_)
                 | RolloutItem::RealtimeItem(_)
+                | RolloutItem::TokenMiserOutput(_)
+                | RolloutItem::TokenMiserDecision(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::EventMsg(_) => {}
             }
@@ -1305,6 +1310,8 @@ pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> 
             | RolloutItem::TurnContext(_)
             | RolloutItem::WorldState(_)
             | RolloutItem::RealtimeItem(_)
+            | RolloutItem::TokenMiserOutput(_)
+            | RolloutItem::TokenMiserDecision(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::EventMsg(_) => {}
         }

@@ -419,6 +419,8 @@ mod job {
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::RealtimeItem(_)
                 | RolloutItem::WorldState(_)
+                | RolloutItem::TokenMiserOutput(_)
+                | RolloutItem::TokenMiserDecision(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::EventMsg(_) => None,
             })

@@ -46,6 +46,12 @@ pub(crate) struct GuardianReadOnlyHistoryTools(
     pub(crate) Vec<Arc<dyn for<'call> codex_tools::ToolExecutor<codex_tools::ToolCall<'call>>>>,
 );
 
+#[derive(Clone, Copy)]
+pub(crate) enum DelegateUserInstructions {
+    Inherit,
+    Omit,
+}
+
 /// Start an interactive sub-Codex thread and return its runtime and IO channels.
 ///
 /// Delegates never request approvals, and the returned IO yields their public events.
@@ -60,6 +66,7 @@ pub(crate) async fn run_codex_thread_interactive(
     parent_environments: TurnEnvironmentSnapshot,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
+    user_instructions_policy: DelegateUserInstructions,
     initial_history: Option<InitialHistory>,
     git_enrichment_policy: GitEnrichmentPolicy,
     windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
@@ -80,7 +87,10 @@ pub(crate) async fn run_codex_thread_interactive(
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
     let forked_from_thread_id = conversation_history.forked_from_id();
     let user_instructions = LoadedUserInstructions {
-        instructions: parent_session.user_instructions().await,
+        instructions: match user_instructions_policy {
+            DelegateUserInstructions::Inherit => parent_session.user_instructions().await,
+            DelegateUserInstructions::Omit => None,
+        },
         warnings: Vec::new(),
     };
     let session_source = SessionSource::SubAgent(subagent_source.clone());
@@ -210,6 +220,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
+    user_instructions_policy: DelegateUserInstructions,
     final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
@@ -228,6 +239,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         parent_environments,
         child_cancel.clone(),
         subagent_source,
+        user_instructions_policy,
         initial_history,
         GitEnrichmentPolicy::Fresh,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,

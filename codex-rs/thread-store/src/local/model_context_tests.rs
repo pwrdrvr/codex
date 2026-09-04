@@ -2,6 +2,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
@@ -9,6 +10,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -23,6 +25,7 @@ use codex_protocol::user_input::UserInput;
 use codex_rollout::CompactedItem;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutLine;
+use codex_rollout::TokenMiserOutput;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -79,6 +82,57 @@ async fn loads_latest_checkpoint_with_required_turn_metadata() {
     assert!(context.items.iter().any(|item| {
         matches!(item, RolloutItem::TurnContext(context) if context.turn_id.as_deref() == Some("turn-2"))
     }));
+}
+
+#[tokio::test]
+async fn exact_token_miser_output_is_retained_but_excluded_from_model_context() {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::from_u128(/*v*/ 1011);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let path = write_paginated_rollout(
+        home.path(),
+        "2025-01-03T13-00-10",
+        uuid,
+        [
+            turn_started("turn-1"),
+            user_message("inspect the tool"),
+            token_miser_output(thread_id, "raw-secret-\0-payload"),
+            turn_context(home.path(), "turn-1"),
+            turn_complete("turn-1"),
+        ],
+    );
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+
+    let context = store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load model context");
+    let full_history = read_thread::load_history_items(path.as_path())
+        .await
+        .expect("load full history");
+
+    assert!(
+        !context
+            .items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::TokenMiserOutput(_)))
+    );
+    assert!(
+        !serde_json::to_string(&context.items)
+            .expect("serialize model context")
+            .contains("raw-secret")
+    );
+    assert!(full_history.iter().any(|item| matches!(
+        item,
+        RolloutItem::TokenMiserOutput(output)
+            if output.content_items
+                == vec![FunctionCallOutputContentItem::InputText {
+                    text: "raw-secret-\0-payload".to_string(),
+                }]
+    )));
 }
 
 #[tokio::test]
@@ -562,6 +616,22 @@ fn turn_complete(turn_id: &str) -> RolloutItem {
         completed_at: None,
         duration_ms: None,
         time_to_first_token_ms: None,
+    }))
+}
+
+fn token_miser_output(thread_id: ThreadId, text: &str) -> RolloutItem {
+    RolloutItem::TokenMiserOutput(Arc::new(TokenMiserOutput {
+        version: 1,
+        object_id: "opaque-object-id".to_string(),
+        thread_id,
+        turn_id: "turn-1".to_string(),
+        call_id: "call-1".to_string(),
+        cell_id: "cell-1".to_string(),
+        script_status: "Script completed".to_string(),
+        success: Some(true),
+        content_items: vec![FunctionCallOutputContentItem::InputText {
+            text: text.to_string(),
+        }],
     }))
 }
 
