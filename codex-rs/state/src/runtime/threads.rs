@@ -1372,6 +1372,8 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
+        | RolloutItem::TokenMiserOutput(_)
+        | RolloutItem::TokenMiserDecision(_)
         | RolloutItem::EventMsg(_) => None,
     })
 }

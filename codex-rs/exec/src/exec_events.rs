@@ -59,6 +59,9 @@ pub struct TurnFailedEvent {
 /// Describes the usage of tokens during a turn.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS, Default)]
 pub struct Usage {
+    /// The provider-reported total tokens used during the turn.
+    #[serde(default)]
+    pub total_tokens: i64,
     /// The number of input tokens used during the turn.
     pub input_tokens: i64,
     /// The number of cached input tokens used during the turn.

@@ -3857,6 +3857,8 @@ async fn start_new_context_window_persists_checkpoint_state() {
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
+        | RolloutItem::TokenMiserOutput(_)
+        | RolloutItem::TokenMiserDecision(_)
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::EventMsg(_) => None,
     });
@@ -3952,6 +3954,8 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
+        | RolloutItem::TokenMiserOutput(_)
+        | RolloutItem::TokenMiserDecision(_)
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::EventMsg(_) => None,
     });

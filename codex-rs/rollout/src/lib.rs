@@ -37,6 +37,9 @@ pub use codex_history::RetainedInputSource;
 pub use codex_history::RolloutItem;
 pub use codex_history::RolloutLine;
 pub use codex_history::resume_multi_agent_version;
+pub use codex_history::TokenMiserDecisionRecord;
+pub use codex_history::TokenMiserOutput;
+pub use codex_history::TokenMiserStoredOutcome;
 pub(crate) use codex_protocol::protocol;
 
 /// Decodes a persisted rollout record without Serde's flattened-envelope buffering.

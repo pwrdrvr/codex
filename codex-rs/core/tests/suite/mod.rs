@@ -61,7 +61,6 @@ mod code_mode_elicitation;
 mod code_mode_model_messages;
 mod code_mode_output_reducer;
 mod codex_apps_protocol;
-mod in_process_token_miser;
 mod codex_delegate;
 mod collaboration_instructions;
 mod compact;
@@ -114,6 +113,7 @@ mod hooks_mcp;
 #[cfg(not(target_os = "windows"))]
 mod hooks_post_tool_use_output;
 mod image_rollout;
+mod in_process_token_miser;
 mod injected_models_cache;
 #[cfg(not(target_os = "windows"))]
 mod interrupt_hooks;
