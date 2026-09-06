@@ -292,9 +292,12 @@ async fn managed_multibyte_replacement_over_byte_cap_fails_open() -> Result<()> 
     Ok(())
 }
 
-#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managed_gate_does_not_delay_or_intercept_nested_code_mode_tools() -> Result<()> {
+    core_test_support::skip_if_target_windows!(
+        Ok(()),
+        "nested command fixtures require Unix shell commands",
+    );
     assert_managed_nested_output(
         r#"const result = await tools.exec_command({ cmd: "printf managed-fast-read", yield_time_ms: 30000 });
 text(result.output);"#,
@@ -303,9 +306,12 @@ text(result.output);"#,
     ).await
 }
 
-#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managed_nested_accounting_contract_preserves_script_output_shapes() -> Result<()> {
+    core_test_support::skip_if_target_windows!(
+        Ok(()),
+        "nested command fixtures require Unix shell commands",
+    );
     for (script, expected) in [
         (
             r#"text(await tools.pwragent__read_all_token_miser_output({objectId: "stored-output"}));
