@@ -3,10 +3,13 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::DynamicToolFunctionSpec;
+use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::PwrdrvrTokenMiserActivation;
 use codex_app_server_protocol::PwrdrvrTokenMiserInitializeCapability;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
@@ -292,10 +295,77 @@ async fn managed_multibyte_replacement_over_byte_cap_fails_open() -> Result<()> 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managed_gate_does_not_delay_or_intercept_nested_code_mode_tools() -> Result<()> {
+    assert_managed_nested_output(
+        r#"const result = await tools.exec_command({ cmd: "printf managed-fast-read", yield_time_ms: 30000 });
+text(result.output);"#,
+        &["managed-fast-read"],
+        /*yield_time_ms*/ 1000,
+    ).await
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_nested_accounting_contract_preserves_script_output_shapes() -> Result<()> {
+    for (script, expected) in [
+        (
+            r#"text(await tools.pwragent__read_all_token_miser_output({objectId: "stored-output"}));
+text(await tools.exec_command({cmd: "printf ordinary-command"}));"#,
+            vec!["retrieved-content", "ordinary-command"],
+        ),
+        (
+            r#"text(await tools.exec_command({cmd: "printf sequential-one"}));
+text(await tools.exec_command({cmd: "printf sequential-two"}));"#,
+            vec!["sequential-one", "sequential-two"],
+        ),
+        (
+            r#"const results = await Promise.all([
+    tools.exec_command({cmd: "printf parallel-one"}),
+    tools.exec_command({cmd: "printf parallel-two"}),
+]);
+text(results);"#,
+            vec!["parallel-one", "parallel-two"],
+        ),
+        (
+            r#"const results = await Promise.allSettled([
+    tools.exec_command({cmd: "printf projected-one"}),
+    tools.exec_command({cmd: "printf projected-two"}),
+]);
+text(results.map(result => result.value.output));"#,
+            vec!["projected-one", "projected-two"],
+        ),
+        (
+            r#"const result = await tools.exec_command({cmd: "sleep 1.3; printf polled-output", yield_time_ms: 1});
+if (!result.session_id) throw new Error("expected a running process");
+text(await tools.write_stdin({session_id: result.session_id, chars: "", yield_time_ms: 1000}));"#,
+            vec!["polled-output"],
+        ),
+        (
+            r#"text(await tools.apply_patch("*** Begin Patch\n*** Add File: accounting-contract.txt\n+patch-content\n*** End Patch"));
+text(await tools.exec_command({cmd: "cat accounting-contract.txt"}));"#,
+            vec!["patch-content"],
+        ),
+    ] {
+        assert_managed_nested_output(script, &expected, /*yield_time_ms*/ 30000).await?;
+    }
+    Ok(())
+}
+
+async fn assert_managed_nested_output(
+    script: &str,
+    expected: &[&str],
+    yield_time_ms: u64,
+) -> Result<()> {
     let bridge = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/post-tool-use"))
         .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)))
+        .mount(&bridge)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/reduce-code-mode-output"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
         .mount(&bridge)
         .await;
 
@@ -305,13 +375,11 @@ async fn managed_gate_does_not_delay_or_intercept_nested_code_mode_tools() -> Re
         vec![
             responses::sse(vec![
                 responses::ev_response_created("resp-code-mode-1"),
+                responses::ev_assistant_message("intent", "Inspect the nested results."),
                 responses::ev_custom_tool_call(
                     "managed-code-mode-call",
                     "exec",
-                    r#"// @exec: {"yield_time_ms": 1000}
-const result = await tools.exec_command({ cmd: "printf managed-fast-read", yield_time_ms: 30000 });
-text(result.output);
-"#,
+                    &format!("// @exec: {{\"yield_time_ms\": {yield_time_ms}}}\n{script}"),
                 ),
                 responses::ev_completed("resp-code-mode-1"),
             ]),
@@ -324,7 +392,8 @@ text(result.output);
     .await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&model_server.uri())
-        .with_model("test-gpt-5.1-codex")
+        .with_model("gpt-5.5")
+        .with_sandbox_mode("danger-full-access")
         .enable_feature(Feature::CodeMode)
         .write(codex_home.path())?;
     let descriptor_directory = TempDir::new()?;
@@ -332,6 +401,17 @@ text(result.output);
     let descriptor_path = descriptor_path
         .to_str()
         .context("descriptor path must be UTF-8")?;
+    let reducer_path = codex_home.path().join("reducer.json");
+    std::fs::write(
+        &reducer_path,
+        json!({
+            "version": 1,
+            "url": format!("{}/v1/reduce-code-mode-output", bridge.uri()),
+            "acceptance_url": format!("{}/v1/accept-code-mode-output", bridge.uri()),
+            "token": BRIDGE_TOKEN,
+        })
+        .to_string(),
+    )?;
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&[(
@@ -343,6 +423,17 @@ text(result.output);
     initialize_pwragent(&mut app_server).await?;
     let started = app_server
         .start_thread(ThreadStartParams {
+            cwd: Some(codex_home.path().to_string_lossy().into_owned()),
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "pwragent__read_all_token_miser_output".to_string(),
+                description: "Retrieve preserved test output".to_string(),
+                input_schema: json!({"type": "object", "properties": {"objectId": {"type": "string"}}, "required": ["objectId"]}),
+                defer_loading: false,
+            })]),
+            config: Some(std::collections::HashMap::from([
+                ("features.code_mode.output_reducer.descriptor_path".to_string(), json!(reducer_path)),
+                ("features.code_mode.output_reducer.min_trigger_bytes".to_string(), json!(1)),
+            ])),
             pwrdrvr_token_miser: Some(PwrdrvrTokenMiserActivation {
                 version: 1,
                 enabled: true,
@@ -350,8 +441,8 @@ text(result.output);
             ..Default::default()
         })
         .await?;
-    app_server
-        .start_turn_and_wait_for_completion(TurnStartParams {
+    let turn_request = app_server
+        .send_turn_start_request(TurnStartParams {
             thread_id: started.thread.id,
             input: vec![UserInput::Text {
                 text: "run the fast Code Mode read".to_string(),
@@ -360,13 +451,40 @@ text(result.output);
             ..Default::default()
         })
         .await?;
+    let _: Value = app_server.read_response(turn_request).await?;
+    if script.contains("tools.pwragent__read_all_token_miser_output") {
+        let request = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            app_server.read_stream_until_request_message(),
+        )
+        .await??;
+        let ServerRequest::DynamicToolCall { request_id, params } = request else {
+            anyhow::bail!("expected retrieval request, got {request:?}");
+        };
+        assert_eq!(params.tool, "pwragent__read_all_token_miser_output");
+        assert_eq!(params.arguments, json!({"objectId": "stored-output"}));
+        app_server
+            .send_response(
+                request_id,
+                json!({
+                    "contentItems": [{"type": "inputText", "text": "retrieved-content"}],
+                    "success": true,
+                }),
+            )
+            .await?;
+    }
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        app_server.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     let model_requests = response_mock.requests();
     assert_eq!(model_requests.len(), 2);
     let output =
         output_text(&model_requests[1].custom_tool_call_output("managed-code-mode-call")["output"]);
     assert!(
-        output.contains("Script completed") && output.contains("managed-fast-read"),
+        output.contains("Script completed") && expected.iter().all(|text| output.contains(text)),
         "a fast nested read must complete in the initial outer cell: {output}"
     );
     assert!(
@@ -377,9 +495,26 @@ text(result.output);
         .received_requests()
         .await
         .context("bridge request recording is enabled")?;
+    assert_eq!(
+        bridge_requests.len(),
+        1,
+        "only terminal outer output reaches the bridge"
+    );
+    assert_eq!(bridge_requests[0].url.path(), "/v1/reduce-code-mode-output");
+    let request: Value = serde_json::from_slice(&bridge_requests[0].body)?;
+    assert_eq!(request["call_id"], "managed-code-mode-call");
+    assert_eq!(request["script_status"], "Script completed");
+    assert_eq!(request["parent_intent"], "Inspect the nested results.");
+    assert!(request["cell_id"].as_str().is_some_and(|id| !id.is_empty()));
     assert!(
-        bridge_requests.is_empty(),
-        "nested Code Mode results are private script inputs, not model-visible gate boundaries"
+        request["script"]
+            .as_str()
+            .is_some_and(|value| value.ends_with(script))
+    );
+    let collected = output_text(&request["content_items"]);
+    assert!(
+        expected.iter().all(|text| collected.contains(text)),
+        "{collected}"
     );
 
     Ok(())
