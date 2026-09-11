@@ -289,4 +289,47 @@ process control and custom output caps do not apply to MXC.
 - `server/capabilities/read` — read stable extension capabilities implemented by this app-server binary.
 `server/capabilities/read` reports fork-specific contracts without relying on the package version. The current response advertises Code Mode output reducer protocol version `1`, continuation-guidance version `1`, intent-context version `1`, `parent_intent` as both the reducer request field and optional PostToolUse field, actionable-state version `1` with `actionable_state` as both its reducer request and response field and `codex_actionable_state` as its trusted model-output tag, its two supported config keys, the always-boolean `is_code_mode_nested` PostToolUse field, the nested-call grouping field names and version, the optional exact PostToolUse output field names and version, whether reducer settings can be refreshed through `thread/resume`, the `dynamicTools` replacement field for subsequent turns, and both acceptance callback shapes. Its `deferredCompletion` object is exactly `{"version":1,"terminalOnly":true,"preservesOriginalCallId":true,"preservesCellId":true,"waitToolName":"wait"}`: live/yielded output is never sent to the reducer, and terminal output delivered through `wait` uses the original outer `exec` call ID and cell ID. Its `modelGuidance` object advertises version `1`, `features.code_mode.output_reducer.tool_description_guidance` as `toolDescriptionConfigKey`, `features.code_mode.output_reducer.continuation_guidance` as `continuationConfigKey`, and `model_visible_overhead_characters` as `modelVisibleOverheadRequestField`. `parent_intent` contains at most 4,000 Unicode scalar characters from the most recent visible assistant narration preceding the direct tool call or outer Code Mode call; it is omitted when no such narration exists. PostToolUse `tool_response` retains the model-budget-truncated stable hook response. Threads configured with the output-reducer extension additionally receive `token_miser_exact_tool_response_version: 1` and the full collected stable response in `token_miser_exact_tool_response`; both fields are omitted together otherwise. When nested unified-exec calls expose process continuation handles, Codex sends a bounded `actionable_state` envelope in reducer requests, requires the host response to echo it exactly, and appends the authoritative envelope outside the reducer-controlled replacement. A missing or conflicting echo rejects the replacement. `pwrdrvrTokenMiser.codeModeNestedPostToolUse` is `false`: the managed gate applies to direct model-visible tool results, while private nested Code Mode inputs flow uninterrupted to the script and the terminal outer output uses the generic reducer. `thread/resume.dynamicTools` has exact replacement semantics: omission preserves the current catalog, `[]` clears it, and a non-empty array replaces it. A loaded thread with no first turn can be resumed solely to apply these overrides.
 
+#### Nested accounting transport
+
+The grouping and exact-output capabilities describe **ordinary configured PostToolUse hooks**.
+They do not promise that managed Token Miser activation delivers nested hook requests. In
+particular, `pwrdrvrTokenMiser.codeModeNestedPostToolUse: false` means the managed bridge receives
+no nested PostToolUse requests. Registering a generic output reducer does not register a hook.
+The managed path and an explicitly configured ordinary hook have different delivery contracts:
+
+| Delivery path | Nested invocation evidence | Output boundary |
+| --- | --- | --- |
+| Ordinary PostToolUse hook | `is_code_mode_nested: true`, grouping version 1, `code_mode_cell_id`, `code_mode_tool_call_id`; exact response fields when a reducer is configured | Successful individual tool result, before the script consumes it |
+| Managed Token Miser PostToolUse bridge | No nested requests when `codeModeNestedPostToolUse` is false | Direct tool results only |
+| Generic Code Mode reducer | Outer `call_id`, `cell_id`, original `script` when available, optional `parent_intent`; no per-invocation ledger in v1 | Terminal emitted cell output, including completion through `wait` |
+
+Multiple `text(await tools.exec_command(...))` calls, `Promise.all`, `Promise.allSettled`, and
+projection such as `text(results.map(result => result.output))` all use the same nested dispatch
+contract. The emitted content is not an invocation ledger: scripts can discard, project, repeat,
+or combine private tool results. The presence of a tool name in the script does not prove it ran.
+`parent_intent` is bounded visible assistant narration, not hidden reasoning or a command category.
+
+Hosts must distinguish **unavailable nested capture** from an observed count of zero. For example,
+PwrAgent's `captureNestedPostToolUse` cannot populate `capturedCommandInvocationCount` on the
+managed-only path above; negotiating grouping version 1 alone cannot make that evidence available.
+An accounting consumer must propagate capture availability to its observations and UI instead of
+interpreting an empty captured group as proof that no commands ran. An optional future execution
+ledger needs its own capability negotiation, bounded records, overflow/completeness reporting,
+and stable `(thread_id, turn_id, cell_id, tool_call_id)` deduplication. Re-enabling the synchronous
+managed reduction gate for nested inputs is not an accounting fix: it delays scripts and operates
+before the model-visible output is known. Ordinary successful-result hooks also do not constitute
+a complete ledger of failed or interrupted invocations. The separate
+`internal_chat_message_metadata_passthrough.executed_tool_calls` recorder is best-effort
+warehouse-only Responses metadata, explicitly outside the public app-server protocol; private
+rollouts are not a supported runtime accounting transport.
+
+Retrieval classification and savings are host-owned. A cell can retrieve preserved output **and**
+run an ordinary command, and Codex forwards their combined emitted output to the terminal reducer.
+PwrAgent must not classify the entire cell as retrieval-only merely because its script mentions a
+retrieval method. Track confirmed model-visible retrieval separately from command evidence and
+reducer eligibility, deduplicate delivery records, and respect the outer output budget. Raw nested
+response sizes do not establish delivered tokens or savings; scripts can project them away and
+Codex can truncate emitted output. Neither missing capture nor script spelling establishes that a
+particular model needs a different tool format or that its summaries are worse.
+
 A v1 descriptor is strict JSON with `{"version":1,"url":string,"acceptance_url":string,"token":string}`. Reducer requests include `model_visible_overhead_characters`, the exact Unicode-scalar count of Codex's neutral untrusted-data framing plus the configured trusted continuation guidance. A successful reduction response is `{"replacement":FunctionCallOutputContentItem[],"response_id":string,"actionable_state"?:object}`. When the request includes `actionable_state`, the response field is required and must be structurally identical; otherwise it must be absent or `null`. After Codex validates and commits to the Code Mode replacement, it POSTs `{"version":1,"response_id":string,"thread_id":string,"turn_id":string,"call_id":string,"cell_id":string}`. A direct PostToolUse hook may put an opaque ID at `hookSpecificOutput.response_id`; only after Codex selects that hook feedback as the direct model-visible replacement does it POST `{"version":1,"response_id":string,"session_id":string,"turn_id":string,"tool_use_id":string}` to the same authenticated `acceptance_url`. PostToolUse input always includes `is_code_mode_nested` as a boolean and, on binaries implementing this exact direct-acceptance seam, `token_miser_acceptance_version: 1`. Nested calls also include `token_miser_grouping_version: 1`, `code_mode_cell_id`, and `code_mode_tool_call_id`; direct calls omit the two IDs. The cell ID is the group key and matches the reducer request's `cell_id`. Model-guidance version `1` defaults the one-time Code Mode tool guidance to positive concurrency language and omits repeated continuation guidance. Consumers may override either independently; each configured string is hard-capped at 512 Unicode scalar characters. Callback errors never revoke a selected replacement. The host must finalize savings only after a valid callback, so a lost callback can undercount but cannot create a false delivery claim. Clients should treat method-not-found or a missing capability field as unsupported.
