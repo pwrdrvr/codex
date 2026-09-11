@@ -22,9 +22,11 @@ use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::NewContextWindowHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
+use crate::tools::handlers::ReadTokenMiserOutputHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
+use crate::tools::handlers::SearchTokenMiserOutputHandler;
 use crate::tools::handlers::SendUserMessageAsyncHandler;
 use crate::tools::handlers::SleepHandler;
 use crate::tools::handlers::TestSyncHandler;
@@ -893,13 +895,21 @@ fn register_code_mode_executors(
             } else {
                 codex_code_mode::ImageDetailVisibility::Visible
             },
-            turn_context
-                .config
-                .code_mode
-                .output_reducer
-                .as_ref()
-                .map(|config| OutputReductionGuidance::Include(&config.tool_description_guidance))
-                .unwrap_or(OutputReductionGuidance::Omit),
+            if turn_context.config.code_mode.token_miser.is_some() {
+                OutputReductionGuidance::Include(
+                    crate::config::TOKEN_MISER_TOOL_DESCRIPTION_GUIDANCE,
+                )
+            } else {
+                turn_context
+                    .config
+                    .code_mode
+                    .output_reducer
+                    .as_ref()
+                    .map(|config| {
+                        OutputReductionGuidance::Include(&config.tool_description_guidance)
+                    })
+                    .unwrap_or(OutputReductionGuidance::Omit)
+            },
         ),
         code_mode_nested_tool_specs,
     );
@@ -1140,6 +1150,11 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     let turn_context = context.turn_context;
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.environments);
+
+    if turn_context.config.code_mode.token_miser.is_some() {
+        registry.add_with_exposure(ReadTokenMiserOutputHandler, ToolExposure::CodeModeOnly);
+        registry.add_with_exposure(SearchTokenMiserOutputHandler, ToolExposure::CodeModeOnly);
+    }
 
     if turn_context.config.update_plan_enabled {
         registry.add(PlanHandler);

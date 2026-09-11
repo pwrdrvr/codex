@@ -6,6 +6,7 @@ pub(crate) mod pwrdrvr_token_miser;
 mod reducer;
 mod response_adapter;
 mod telemetry;
+mod token_miser;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
@@ -30,6 +31,7 @@ use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::CodeModeConfig;
+use crate::config::InProcessTokenMiserConfig;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
@@ -60,7 +62,9 @@ use reducer::HttpCodeModeOutputReducer;
 pub(crate) use reducer::PostToolUseAcceptanceContext;
 use reducer::ReductionContext;
 use reducer::apply_output_reduction;
+use reducer::clamp_max_output_tokens;
 use response_adapter::into_function_call_output_content_items;
+use token_miser::TokenMiserService;
 pub(crate) use wait_handler::CodeModeWaitHandler;
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
@@ -105,6 +109,7 @@ pub(crate) struct CodeModeService {
     /// state without echoing it exactly.
     actionable_states: ActionableStateStore,
     pwrdrvr_token_miser: pwrdrvr_token_miser::PwrdrvrTokenMiserGate,
+    token_miser: TokenMiserService,
     unavailable_warning_emitted: AtomicBool,
 }
 
@@ -112,6 +117,7 @@ pub(crate) struct CodeModeService {
 struct CodeModeReductionRuntimeConfig {
     max_output_tokens_ceiling: Option<usize>,
     output_reducer: Option<Arc<dyn CodeModeOutputReducer>>,
+    token_miser: Option<InProcessTokenMiserConfig>,
 }
 
 #[derive(Clone)]
@@ -126,25 +132,51 @@ enum ReductionBoundary {
     Terminal,
 }
 
+struct ReductionDelivery<'a> {
+    boundary: ReductionBoundary,
+    script_status: &'a str,
+    success: Option<bool>,
+}
+
 impl CodeModeReductionRuntimeConfig {
     fn from_config(config: &CodeModeConfig) -> Self {
-        let output_reducer = config
-            .output_reducer
-            .clone()
-            .and_then(HttpCodeModeOutputReducer::new)
-            .map(|reducer| Arc::new(reducer) as Arc<dyn CodeModeOutputReducer>);
+        let output_reducer = config.token_miser.is_none().then(|| {
+            config
+                .output_reducer
+                .clone()
+                .and_then(HttpCodeModeOutputReducer::new)
+                .map(|reducer| Arc::new(reducer) as Arc<dyn CodeModeOutputReducer>)
+        });
         Self {
             max_output_tokens_ceiling: config.max_output_tokens_ceiling,
-            output_reducer,
+            output_reducer: output_reducer.flatten(),
+            token_miser: config.token_miser.clone(),
         }
     }
 }
 
 impl CodeModeService {
+    #[cfg(test)]
     pub(crate) fn new(
         session_provider: Arc<dyn CodeModeSessionProvider>,
         config: &CodeModeConfig,
         executed_tool_calls: Option<Arc<ExecutedToolCallRecorder>>,
+    ) -> Self {
+        Self::new_with_token_miser_outputs(
+            session_provider,
+            config,
+            executed_tool_calls,
+            Vec::new(),
+            /*token_miser_thread_id*/ None,
+        )
+    }
+
+    pub(crate) fn new_with_token_miser_outputs(
+        session_provider: Arc<dyn CodeModeSessionProvider>,
+        config: &CodeModeConfig,
+        executed_tool_calls: Option<Arc<ExecutedToolCallRecorder>>,
+        token_miser_items: Vec<codex_history::RolloutItem>,
+        token_miser_thread_id: Option<codex_protocol::ThreadId>,
     ) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new(executed_tool_calls));
         let availability = session_provider.availability();
@@ -161,8 +193,38 @@ impl CodeModeService {
             cell_parent_intents: Mutex::new(HashMap::new()),
             actionable_states: ActionableStateStore::default(),
             pwrdrvr_token_miser: pwrdrvr_token_miser::PwrdrvrTokenMiserGate::new(),
+            token_miser: TokenMiserService::new(token_miser_items, token_miser_thread_id),
             unavailable_warning_emitted: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn mark_token_miser_retrieval(&self, source: &ToolCallSource) {
+        if let ToolCallSource::CodeMode { cell_id, .. } = source {
+            self.token_miser.mark_explicit_retrieval(cell_id);
+        }
+    }
+
+    pub(crate) fn read_token_miser_output(
+        &self,
+        thread_id: codex_protocol::ThreadId,
+        object_id: &str,
+        item_index: usize,
+        offset: usize,
+        max_bytes: usize,
+    ) -> Result<serde_json::Value, String> {
+        self.token_miser
+            .read(thread_id, object_id, item_index, offset, max_bytes)
+    }
+
+    pub(crate) fn search_token_miser_output(
+        &self,
+        thread_id: codex_protocol::ThreadId,
+        object_id: &str,
+        query: &str,
+        max_results: usize,
+    ) -> Result<serde_json::Value, String> {
+        self.token_miser
+            .search(thread_id, object_id, query, max_results)
     }
 
     pub(crate) async fn accept_post_tool_use_replacements(
@@ -195,13 +257,16 @@ impl CodeModeService {
     }
 
     pub(crate) fn pwrdrvr_token_miser_is_enabled(&self) -> bool {
-        self.pwrdrvr_token_miser.is_enabled()
+        self.reduction_config().token_miser.is_none() && self.pwrdrvr_token_miser.is_enabled()
     }
 
     pub(crate) async fn run_pwrdrvr_token_miser(
         &self,
         request: &codex_hooks::PostToolUseRequest,
     ) -> Option<pwrdrvr_token_miser::ManagedPostToolUseReplacement> {
+        if self.reduction_config().token_miser.is_some() {
+            return None;
+        }
         self.pwrdrvr_token_miser.run(request).await
     }
 
@@ -521,7 +586,8 @@ pub(super) async fn handle_runtime_response(
     };
     let service = &exec.session.services.code_mode_service;
     let reduction_config = service.reduction_config();
-    let reduction_enabled = reduction_config.output_reducer.is_some();
+    let reduction_enabled =
+        reduction_config.output_reducer.is_some() || reduction_config.token_miser.is_some();
     // Scoped so the borrow of `response` ends before the match below moves it.
     let (cell_id, original_call_id, script, parent_intent, actionable_state) = {
         let cell_id = response_cell_id(&response);
@@ -588,11 +654,16 @@ pub(super) async fn handle_runtime_response(
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             content_items = reduce_code_mode_result(
+                exec,
                 &reduction_config,
                 &context,
                 content_items,
                 max_output_tokens,
-                ReductionBoundary::Live,
+                ReductionDelivery {
+                    boundary: ReductionBoundary::Live,
+                    script_status: &script_status,
+                    success: None,
+                },
             )
             .await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
@@ -602,11 +673,16 @@ pub(super) async fn handle_runtime_response(
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             content_items = reduce_code_mode_result(
+                exec,
                 &reduction_config,
                 &context,
                 content_items,
                 max_output_tokens,
-                ReductionBoundary::Terminal,
+                ReductionDelivery {
+                    boundary: ReductionBoundary::Terminal,
+                    script_status: &script_status,
+                    success: Some(false),
+                },
             )
             .await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
@@ -626,11 +702,16 @@ pub(super) async fn handle_runtime_response(
                 });
             }
             content_items = reduce_code_mode_result(
+                exec,
                 &reduction_config,
                 &context,
                 content_items,
                 max_output_tokens,
-                ReductionBoundary::Terminal,
+                ReductionDelivery {
+                    boundary: ReductionBoundary::Terminal,
+                    script_status: &script_status,
+                    success: Some(success),
+                },
             )
             .await;
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
@@ -644,22 +725,86 @@ pub(super) async fn handle_runtime_response(
 
 /// Applies the host reduction seam, falling back to the built-in truncation in every other case.
 async fn reduce_code_mode_result(
+    exec: &ExecContext,
     reduction_config: &CodeModeReductionRuntimeConfig,
     context: &ReductionContext,
     content_items: Vec<FunctionCallOutputContentItem>,
     max_output_tokens: Option<usize>,
-    boundary: ReductionBoundary,
+    delivery: ReductionDelivery<'_>,
 ) -> Vec<FunctionCallOutputContentItem> {
-    let max_output_tokens = match boundary {
-        ReductionBoundary::Live if reduction_config.output_reducer.is_some() => {
-            Some(resolve_max_tokens(max_output_tokens).min(MAX_LIVE_MODEL_VISIBLE_OUTPUT_TOKENS))
-        }
-        ReductionBoundary::Live | ReductionBoundary::Terminal => max_output_tokens,
-    };
+    let ReductionDelivery {
+        boundary,
+        script_status,
+        success,
+    } = delivery;
+    let max_output_tokens =
+        model_visible_max_output_tokens(reduction_config, max_output_tokens, boundary);
     let reducer = match boundary {
         ReductionBoundary::Live => None,
         ReductionBoundary::Terminal => reduction_config.output_reducer.as_ref(),
     };
+    if matches!(boundary, ReductionBoundary::Live) && reduction_config.token_miser.is_some() {
+        return match context.actionable_state.as_ref() {
+            Some(state) => state.output_items().unwrap_or_else(|| {
+                tracing::warn!(
+                    "Codex-owned actionable state was not renderable at Token Miser boundary"
+                );
+                Vec::new()
+            }),
+            None => Vec::new(),
+        };
+    }
+    if matches!(boundary, ReductionBoundary::Terminal)
+        && let Some(token_miser_config) = reduction_config.token_miser.as_ref()
+    {
+        let max_output_tokens = clamp_max_output_tokens(
+            max_output_tokens,
+            reduction_config.max_output_tokens_ceiling,
+        );
+        let actionable_output_items = match context.actionable_state.as_ref() {
+            Some(state) => match state.output_items() {
+                Some(items) => items,
+                None => {
+                    tracing::warn!(
+                        "Codex-owned actionable state was not renderable at Token Miser boundary"
+                    );
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
+        if exec
+            .session
+            .services
+            .code_mode_service
+            .token_miser
+            .take_explicit_retrieval(&context.cell_id)
+        {
+            let mut visible = truncate_code_mode_result(content_items, max_output_tokens);
+            visible.extend(actionable_output_items);
+            return visible;
+        }
+        let mut visible = exec
+            .session
+            .services
+            .code_mode_service
+            .token_miser
+            .reduce_terminal(
+                &exec.session,
+                &exec.turn,
+                context,
+                token_miser::TerminalOutput {
+                    script_status,
+                    success,
+                    content_items,
+                    max_output_tokens,
+                },
+                token_miser_config,
+            )
+            .await;
+        visible.extend(actionable_output_items);
+        return visible;
+    }
     let reduction_started_at = std::time::Instant::now();
     let reduced = apply_output_reduction(
         reducer,
@@ -678,6 +823,22 @@ async fn reduce_code_mode_result(
         "code-mode model-visible reduction boundary completed"
     );
     reduced
+}
+
+fn model_visible_max_output_tokens(
+    reduction_config: &CodeModeReductionRuntimeConfig,
+    max_output_tokens: Option<usize>,
+    boundary: ReductionBoundary,
+) -> Option<usize> {
+    match boundary {
+        ReductionBoundary::Live
+            if reduction_config.output_reducer.is_some()
+                || reduction_config.token_miser.is_some() =>
+        {
+            Some(resolve_max_tokens(max_output_tokens).min(MAX_LIVE_MODEL_VISIBLE_OUTPUT_TOKENS))
+        }
+        ReductionBoundary::Live | ReductionBoundary::Terminal => max_output_tokens,
+    }
 }
 
 fn response_cell_id(response: &RuntimeResponse) -> &CellId {
@@ -846,7 +1007,7 @@ mod tests {
     use super::CodeModeService;
     use super::ReductionBoundary;
     use super::build_nested_tool_payload;
-    use super::reduce_code_mode_result;
+    use super::model_visible_max_output_tokens;
     use super::reducer::CodeModeOutputReducer;
     use super::reducer::PostToolUseAcceptanceContext;
     use super::reducer::ReductionContext;
@@ -945,6 +1106,15 @@ mod tests {
         }
     }
 
+    fn in_process_token_miser_config() -> crate::config::InProcessTokenMiserConfig {
+        crate::config::InProcessTokenMiserConfig {
+            model: crate::config::DEFAULT_TOKEN_MISER_MODEL.to_string(),
+            timeout: Duration::from_secs(1),
+            max_reducer_input_bytes: crate::config::TOKEN_MISER_MAX_INPUT_BYTES,
+            max_replacement_bytes: crate::config::TOKEN_MISER_MAX_REPLACEMENT_BYTES,
+        }
+    }
+
     fn service(config: &CodeModeConfig) -> CodeModeService {
         CodeModeService::new(
             Arc::new(DisabledCodeModeSessionProvider),
@@ -1008,6 +1178,22 @@ mod tests {
     }
 
     #[test]
+    fn in_process_token_miser_precedence_tracks_runtime_config_refreshes() {
+        let mut in_process = reducer_config();
+        in_process.token_miser = Some(in_process_token_miser_config());
+        let service = service(&in_process);
+
+        let active = service.reduction_config();
+        assert!(active.token_miser.is_some());
+        assert!(active.output_reducer.is_none());
+
+        service.refresh_reduction_config(&reducer_config());
+        let managed = service.reduction_config();
+        assert!(managed.token_miser.is_none());
+        assert!(managed.output_reducer.is_some());
+    }
+
+    #[test]
     fn cell_reduction_identity_survives_refresh_and_late_enablement() {
         let enabled = reducer_config();
         let disabled = CodeModeConfig::default();
@@ -1036,36 +1222,19 @@ mod tests {
         assert_eq!(retained.script.as_ref(), "text('late')");
     }
 
-    #[tokio::test]
-    async fn live_output_stays_below_the_model_context_review_threshold() {
-        let reducer = Arc::new(AcceptanceConcurrencyProbe {
-            active: AtomicUsize::new(0),
-            max_active: AtomicUsize::new(0),
-        });
+    #[test]
+    fn live_output_has_a_hard_model_visible_ceiling() {
         let config = CodeModeReductionRuntimeConfig {
             max_output_tokens_ceiling: None,
-            output_reducer: Some(reducer),
+            output_reducer: None,
+            token_miser: Some(in_process_token_miser_config()),
         };
-        let context = ReductionContext {
-            thread_id: "thread-id".to_string(),
-            turn_id: "turn-id".to_string(),
-            call_id: "call-id".to_string(),
-            cell_id: "cell-id".to_string(),
-            script: Some("text('running')".to_string()),
-            parent_intent: None,
-            actionable_state: None,
-            script_status: "Script running with cell ID cell-id".to_string(),
-        };
-        let output = reduce_code_mode_result(
-            &config,
-            &context,
+        let output = truncate_code_mode_result(
             vec![FunctionCallOutputContentItem::InputText {
                 text: "live-output ".repeat(8_000),
             }],
-            Some(10_000),
-            ReductionBoundary::Live,
-        )
-        .await;
+            model_visible_max_output_tokens(&config, Some(10_000), ReductionBoundary::Live),
+        );
         let output_tokens = output
             .iter()
             .map(|item| match item {

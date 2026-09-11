@@ -220,7 +220,11 @@ impl RollbackPlanner {
                 }
             }
             RolloutItem::WorldState(_) | RolloutItem::RealtimeItem(_) => {}
-            RolloutItem::SecurityRiskScore(_) => self.record_boundaries[index] = None,
+            RolloutItem::SecurityRiskScore(_)
+            | RolloutItem::TokenMiserOutput(_)
+            | RolloutItem::TokenMiserDecision(_) => {
+                self.record_boundaries[index] = None;
+            }
         }
 
         Ok(())

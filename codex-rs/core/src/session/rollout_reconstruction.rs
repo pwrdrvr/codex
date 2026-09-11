@@ -283,6 +283,8 @@ impl Session {
                 RolloutItem::EventMsg(_)
                 | RolloutItem::SessionMeta(_)
                 | RolloutItem::RealtimeItem(_)
+                | RolloutItem::TokenMiserOutput(_)
+                | RolloutItem::TokenMiserDecision(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
             }
@@ -373,6 +375,8 @@ impl Session {
                 RolloutItem::EventMsg(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::RealtimeItem(_)
+                | RolloutItem::TokenMiserOutput(_)
+                | RolloutItem::TokenMiserDecision(_)
                 | RolloutItem::WorldState(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::SessionMeta(_) => {}
@@ -414,6 +418,8 @@ impl Session {
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::RealtimeItem(_)
+                | RolloutItem::TokenMiserOutput(_)
+                | RolloutItem::TokenMiserDecision(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::EventMsg(_) => {
                     unreachable!("only world-state replay items are collected")

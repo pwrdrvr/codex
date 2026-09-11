@@ -107,6 +107,46 @@ pub enum RolloutItem {
     EventMsg(EventMsg),
     /// Sparse, model-invisible facts used to reconstruct realtime presentation.
     RealtimeItem(RealtimeItem),
+    /// Exact model-invisible tool output retained for in-process Token Miser retrieval. The
+    /// reference-counted payload keeps rollout admission and persistence from cloning its bounded
+    /// transport allocation.
+    TokenMiserOutput(Arc<TokenMiserOutput>),
+    /// Model-invisible reducer decision and incurred usage committed after reduction.
+    TokenMiserDecision(TokenMiserDecisionRecord),
+}
+
+/// Exact terminal Code Mode output retained outside model-visible history.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+pub struct TokenMiserOutput {
+    pub version: u32,
+    pub object_id: String,
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub call_id: String,
+    pub cell_id: String,
+    pub script_status: String,
+    pub success: Option<bool>,
+    pub content_items: Vec<codex_protocol::models::FunctionCallOutputContentItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct TokenMiserDecisionRecord {
+    pub version: u32,
+    pub object_id: String,
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub call_id: String,
+    pub cell_id: String,
+    pub outcome: TokenMiserStoredOutcome,
+    pub usage: Option<codex_protocol::protocol::TokenUsage>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "decision", rename_all = "snake_case")]
+pub enum TokenMiserStoredOutcome {
+    Passthrough,
+    Replace { replacement: String },
+    Hide { reason: String },
 }
 
 impl Serialize for RolloutItem {
@@ -421,6 +461,8 @@ fn multi_agent_version_from_items(
             | RolloutItem::WorldState(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::RealtimeItem(_)
+            | RolloutItem::TokenMiserOutput(_)
+            | RolloutItem::TokenMiserDecision(_)
             | RolloutItem::EventMsg(_) => None,
         })
     })

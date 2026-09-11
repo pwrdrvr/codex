@@ -1230,7 +1230,7 @@ fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
 }
 
 #[test]
-fn token_usage_update_is_emitted_on_turn_completion() {
+fn harbor_shaped_root_turn_completed_usage_includes_all_token_miser_cost_once() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let usage_update =
@@ -1287,6 +1287,7 @@ fn token_usage_update_is_emitted_on_turn_completion() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
                 usage: Usage {
+                    total_tokens: 42,
                     input_tokens: 10,
                     cached_input_tokens: 3,
                     cache_write_input_tokens: 4,
@@ -1296,6 +1297,20 @@ fn token_usage_update_is_emitted_on_turn_completion() {
             })],
             status: CodexStatus::InitiateShutdown,
         }
+    );
+    assert_eq!(
+        serde_json::to_value(&completed.events[0]).expect("serialize exec JSON event"),
+        json!({
+            "type": "turn.completed",
+            "usage": {
+                "total_tokens": 42,
+                "input_tokens": 10,
+                "cached_input_tokens": 3,
+                "cache_write_input_tokens": 4,
+                "output_tokens": 29,
+                "reasoning_output_tokens": 7,
+            }
+        })
     );
 }
 

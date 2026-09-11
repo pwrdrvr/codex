@@ -20,6 +20,7 @@ use codex_protocol::review_format::format_review_findings_block;
 use codex_protocol::review_format::render_review_output_text;
 use tokio_util::sync::CancellationToken;
 
+use crate::codex_delegate::DelegateUserInstructions;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
 use crate::session::TurnInput;
@@ -134,6 +135,7 @@ async fn start_review_conversation(
         ctx.clone(),
         cancellation_token,
         SubAgentSource::Review,
+        DelegateUserInstructions::Inherit,
         /*final_output_json_schema*/ None,
         /*initial_history*/ None,
     )

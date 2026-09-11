@@ -44,6 +44,31 @@ pub struct CodeModeConfigToml {
     /// Optional out-of-process reducer for code-mode output on its way into model context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_reducer: Option<CodeModeOutputReducerToml>,
+    /// Optional Codex-owned Token Miser reducer. It is inert unless `enabled = true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_miser: Option<InProcessTokenMiserConfigToml>,
+}
+
+/// Configures model-invisible retention and in-process Luna reduction of Code Mode output.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InProcessTokenMiserConfigToml {
+    /// Explicitly activates this experimental mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Reducer model. Defaults to `gpt-5.6-luna`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Total deadline for one reducer turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Requested byte bound for the complete framed reducer-input item; Codex clamps it to 896
+    /// bytes so even token-dense UTF-8 remains below the 1K-token review threshold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_reducer_input_bytes: Option<usize>,
+    /// Hard UTF-8 byte bound for a Luna replacement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_replacement_bytes: Option<usize>,
 }
 
 /// Configures the optional external code-mode output reducer.

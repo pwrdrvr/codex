@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use super::CodexHarnessMetadata;
 use super::CompactedItem;
@@ -11,6 +12,8 @@ use super::ResponseItemEnvelope;
 use super::RolloutItem;
 use super::SecurityRiskScore;
 use super::SessionMetaLine;
+use super::TokenMiserDecisionRecord;
+use super::TokenMiserOutput;
 use super::TurnContextItem;
 use super::WorldStateItem;
 use schemars::JsonSchema;
@@ -53,6 +56,12 @@ pub(super) enum RolloutItemWire<'a> {
     RealtimeItem {
         payload: Cow<'a, RealtimeItem>,
     },
+    TokenMiserOutput {
+        payload: Cow<'a, TokenMiserOutput>,
+    },
+    TokenMiserDecision {
+        payload: Cow<'a, TokenMiserDecisionRecord>,
+    },
 }
 
 impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
@@ -93,6 +102,12 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
             RolloutItem::RealtimeItem(payload) => Self::RealtimeItem {
                 payload: Cow::Borrowed(payload),
             },
+            RolloutItem::TokenMiserOutput(payload) => Self::TokenMiserOutput {
+                payload: Cow::Borrowed(payload.as_ref()),
+            },
+            RolloutItem::TokenMiserDecision(payload) => Self::TokenMiserDecision {
+                payload: Cow::Borrowed(payload),
+            },
         }
     }
 }
@@ -123,6 +138,12 @@ impl From<RolloutItemWire<'_>> for RolloutItem {
             }
             RolloutItemWire::EventMsg { payload } => Self::EventMsg(payload.into_owned()),
             RolloutItemWire::RealtimeItem { payload } => Self::RealtimeItem(payload.into_owned()),
+            RolloutItemWire::TokenMiserOutput { payload } => {
+                Self::TokenMiserOutput(Arc::new(payload.into_owned()))
+            }
+            RolloutItemWire::TokenMiserDecision { payload } => {
+                Self::TokenMiserDecision(payload.into_owned())
+            }
         }
     }
 }

@@ -1,8 +1,12 @@
+use codex_history::TokenMiserDecisionRecord;
+use codex_history::TokenMiserOutput;
+use codex_history::TokenMiserStoredOutcome;
 use codex_protocol::ThreadId;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -17,8 +21,10 @@ use codex_rollout::RolloutItem;
 use codex_rollout::RolloutLine;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use super::*;
+use crate::protocol::thread_history::build_turns_from_rollout_items;
 use crate::protocol::v2::ThreadItem;
 use crate::protocol::v2::TurnError;
 
@@ -216,6 +222,49 @@ fn ignores_legacy_abort_without_turn_id_and_context_only_records() {
     assert!(aborted.is_empty());
     assert!(compacted.is_empty());
     assert!(security_risk.is_empty());
+}
+
+#[test]
+fn token_miser_records_are_not_admitted_to_thread_history() {
+    let thread_id = ThreadId::new();
+    let output = TokenMiserOutput {
+        version: 1,
+        object_id: "opaque-object".to_string(),
+        thread_id,
+        turn_id: "turn-1".to_string(),
+        call_id: "call-1".to_string(),
+        cell_id: "cell-1".to_string(),
+        script_status: "Script completed".to_string(),
+        success: Some(true),
+        content_items: vec![FunctionCallOutputContentItem::InputText {
+            text: "raw output that must remain internal".to_string(),
+        }],
+    };
+    let decision = TokenMiserDecisionRecord {
+        version: 1,
+        object_id: output.object_id.clone(),
+        thread_id,
+        turn_id: output.turn_id.clone(),
+        call_id: output.call_id.clone(),
+        cell_id: output.cell_id.clone(),
+        outcome: TokenMiserStoredOutcome::Hide {
+            reason: "retained".to_string(),
+        },
+        usage: None,
+    };
+    let records = [
+        RolloutItem::TokenMiserOutput(Arc::new(output)),
+        RolloutItem::TokenMiserDecision(decision),
+    ];
+
+    assert_eq!(
+        records.iter().cloned().map(project).collect::<Vec<_>>(),
+        vec![
+            ThreadHistoryChangeSet::default(),
+            ThreadHistoryChangeSet::default(),
+        ]
+    );
+    assert_eq!(build_turns_from_rollout_items(&records), Vec::new());
 }
 
 #[test]
