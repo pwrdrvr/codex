@@ -745,7 +745,7 @@ fn create_test_package_app_server(codex_home: &Path, zsh_path: &Path) -> Result<
     std::fs::write(package_dir.join("codex-package.json"), "{}")?;
 
     let app_server = bin_dir.join("codex-app-server");
-    copy_with_permissions(
+    hard_link_or_copy_with_permissions(
         &codex_utils_cargo_bin::cargo_bin("codex-app-server")?,
         &app_server,
     )?;
@@ -767,9 +767,38 @@ fn command_packaged_zsh_path(codex_home: &Path) -> PathBuf {
     std::fs::canonicalize(&path).unwrap_or(path)
 }
 
+fn hard_link_or_copy_with_permissions(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::canonicalize(source)
+        .and_then(|source| std::fs::hard_link(source, destination))
+        .or_else(|_| copy_with_permissions(source, destination))
+}
+
 fn copy_with_permissions(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::copy(source, destination)?;
     std::fs::set_permissions(destination, std::fs::metadata(source)?.permissions())
+}
+
+#[test]
+fn hard_link_or_copy_with_permissions_prefers_hard_link() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::symlink;
+
+    let tmp = TempDir::new()?;
+    let real_source = tmp.path().join("real-source");
+    let source = tmp.path().join("source-link");
+    let destination = tmp.path().join("destination");
+    std::fs::write(&real_source, "fixture")?;
+    symlink(&real_source, &source)?;
+
+    hard_link_or_copy_with_permissions(&source, &destination)?;
+
+    let source_metadata = std::fs::metadata(real_source)?;
+    let destination_metadata = std::fs::metadata(destination)?;
+    assert_eq!(
+        (source_metadata.dev(), source_metadata.ino()),
+        (destination_metadata.dev(), destination_metadata.ino())
+    );
+    Ok(())
 }
 
 fn create_config_toml(
