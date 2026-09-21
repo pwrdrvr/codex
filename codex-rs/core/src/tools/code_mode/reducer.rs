@@ -33,6 +33,7 @@ use std::sync::Arc;
 use codex_http_client::HttpClient;
 use codex_http_client::HttpClientBuilder;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ImageReference;
 use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde::Serialize;
@@ -694,7 +695,10 @@ fn estimate_payload_bytes(items: &[FunctionCallOutputContentItem]) -> usize {
         .iter()
         .map(|item| match item {
             FunctionCallOutputContentItem::InputText { text } => text.len(),
-            FunctionCallOutputContentItem::InputImage { image_url, .. } => image_url.len(),
+            FunctionCallOutputContentItem::InputImage { image, .. } => match image {
+                ImageReference::Inline { image_url } => image_url.len(),
+                ImageReference::File { file_id } => file_id.len(),
+            },
             FunctionCallOutputContentItem::InputAudio { audio_url } => audio_url.len(),
             FunctionCallOutputContentItem::EncryptedContent { encrypted_content } => {
                 encrypted_content.len()
