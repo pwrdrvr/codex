@@ -33,11 +33,13 @@ use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 fn tool_response(id: &str, tool: &str, args: Value) -> String {
     sse(vec![
@@ -149,11 +151,16 @@ async fn stdin_reviews_retained_grants_after_turn_permissions_expire() -> Result
         ("denied", ReviewDecision::denied("blocked input")),
         ("allowed", ReviewDecision::Approved),
     ] {
-        let request = wait_for_event_match(&test.codex, |event| match event {
-            EventMsg::ExecApprovalRequest(request) => Some(request.clone()),
-            _ => None,
-        })
-        .await;
+        // Empty polls retain PwrAgent's 30-second minimum before the next write.
+        let EventMsg::ExecApprovalRequest(request) = wait_for_event_with_timeout(
+            &test.codex,
+            |event| matches!(event, EventMsg::ExecApprovalRequest(_)),
+            Duration::from_secs(/*secs*/ 45),
+        )
+        .await
+        else {
+            panic!("expected stdin approval request");
+        };
         assert_eq!(
             (
                 request.kind,
@@ -289,9 +296,12 @@ async fn strict_stdin_review_reaches_guardian_with_sandbox_prompts_disabled() ->
             },
         })
         .await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
+    // The empty poll intentionally waits at least 30 seconds before stdin review.
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(/*secs*/ 45),
+    )
     .await;
     let requests = writes.requests();
     assert_eq!(

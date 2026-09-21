@@ -575,6 +575,23 @@
       ],
       "type": "string"
     },
+    "PwrdrvrTokenMiserActivation": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled",
+        "version"
+      ],
+      "type": "object"
+    },
     "ReasoningEffort": {
       "description": "A non-empty reasoning effort value advertised by the model.",
       "minLength": 1,
@@ -1645,6 +1662,24 @@
         }
       ],
       "description": "@deprecated `friendly` and `pragmatic` no longer select a style. Changing this does not rewrite the thread's existing instructions."
+    },
+    "pwrdrvrTokenMiser": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PwrdrvrTokenMiserActivation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Change the PwrAgent-managed Token Miser activation for this loaded thread. Omission preserves the current state; explicit null disables it."
     },
     "sandbox": {
       "anyOf": [

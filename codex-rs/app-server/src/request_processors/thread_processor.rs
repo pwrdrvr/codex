@@ -3712,7 +3712,8 @@ impl ThreadRequestProcessor {
             params.pwrdrvr_token_miser.as_ref(),
             app_server_client_name.as_deref(),
             pwrdrvr_token_miser_activation_nonce.as_deref(),
-        ).await?;
+        )
+        .await?;
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
                 .pending_thread_unloads
@@ -4364,8 +4365,8 @@ impl ThreadRequestProcessor {
         {
             let existing_rollout_path = existing_thread.rollout_path();
             // A newly started thread is loaded before its rollout exists. Permit
-            // that exact empty-history case to rejoin the live session so resume
-            // overrides can take effect before the first turn. Once a rollout or
+            // explicit PwrAgent overrides in that exact empty-history case so they
+            // can take effect before the first turn. Once a rollout or
             // any conversation history exists, retain the normal stored-thread
             // validation path.
             let source_thread = match existing_rollout_path.as_ref() {
@@ -4375,14 +4376,17 @@ impl ThreadRequestProcessor {
                             "failed to inspect rollout path `{}`: {error}",
                             path.display()
                         ))
-                    })? && !existing_thread.has_conversation_history().await =>
+                    })? && !existing_thread.has_conversation_history().await
+                        && (params.dynamic_tools.is_some()
+                            || has_code_mode_reduction_config_override(params.config.as_ref())
+                            || pwrdrvr_token_miser_activation_change.is_explicit()) =>
                 {
                     None
                 }
-                path => Some(
+                Some(_) | None => Some(
                     self.read_stored_thread_for_resume(
                         &params.thread_id,
-                        path,
+                        /*path*/ None,
                         /*include_history*/ false,
                     )
                     .await?,

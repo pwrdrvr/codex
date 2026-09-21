@@ -538,6 +538,58 @@ class ClientInfo(BaseModel):
     version: str
 
 
+class CodeModeActionableStateCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    model_output_tag: Annotated[str, Field(alias="modelOutputTag")]
+    reducer_request_field: Annotated[str, Field(alias="reducerRequestField")]
+    reducer_response_field: Annotated[str, Field(alias="reducerResponseField")]
+    version: Annotated[int, Field(ge=0)]
+
+
+class CodeModeDeferredCompletionCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    preserves_cell_id: Annotated[bool, Field(alias="preservesCellId")]
+    preserves_original_call_id: Annotated[bool, Field(alias="preservesOriginalCallId")]
+    terminal_only: Annotated[bool, Field(alias="terminalOnly")]
+    version: Annotated[int, Field(ge=0)]
+    wait_tool_name: Annotated[str, Field(alias="waitToolName")]
+
+
+class CodeModeOutputReducerModelGuidanceCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    continuation_config_key: Annotated[str, Field(alias="continuationConfigKey")]
+    model_visible_overhead_request_field: Annotated[
+        str, Field(alias="modelVisibleOverheadRequestField")
+    ]
+    tool_description_config_key: Annotated[str, Field(alias="toolDescriptionConfigKey")]
+    version: Annotated[int, Field(ge=0)]
+
+
+class CodeModePostToolUseExactOutputCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    response_field: Annotated[str, Field(alias="responseField")]
+    version: Annotated[int, Field(ge=0)]
+    version_field: Annotated[str, Field(alias="versionField")]
+
+
+class CodeModePostToolUseGroupingCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cell_id_field: Annotated[str, Field(alias="cellIdField")]
+    tool_call_id_field: Annotated[str, Field(alias="toolCallIdField")]
+    version: Annotated[int, Field(ge=0)]
+    version_field: Annotated[str, Field(alias="versionField")]
+
+
 class CodexErrorInfoValue(Enum):
     context_window_exceeded = "contextWindowExceeded"
     session_budget_exceeded = "sessionBudgetExceeded"
@@ -1182,6 +1234,18 @@ class DesktopOnboardingEntrypoint(RootModel[Literal["life_sciences"]]):
         populate_by_name=True,
     )
     root: Literal["life_sciences"]
+
+
+class DirectPostToolUseAcceptanceCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    hook_acceptance_version: Annotated[int, Field(alias="hookAcceptanceVersion", ge=0)]
+    hook_acceptance_version_field: Annotated[str, Field(alias="hookAcceptanceVersionField")]
+    hook_response_id_field: Annotated[str, Field(alias="hookResponseIdField")]
+    session_id_field: Annotated[str, Field(alias="sessionIdField")]
+    tool_use_id_field: Annotated[str, Field(alias="toolUseIdField")]
+    turn_id_field: Annotated[str, Field(alias="turnIdField")]
 
 
 class InputTextDynamicToolCallOutputContentItem(BaseModel):
@@ -2081,52 +2145,6 @@ class InAppBrowserRequirements(BaseModel):
     allow_external_browser_settings_import: Annotated[
         bool | None, Field(alias="allowExternalBrowserSettingsImport")
     ] = None
-
-
-class InitializeCapabilities(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    experimental_api: Annotated[
-        bool | None,
-        Field(
-            alias="experimentalApi",
-            description="Opt into receiving experimental API methods and fields.",
-        ),
-    ] = False
-    extensions: Annotated[
-        dict[str, Any] | None,
-        Field(description="MCP extension settings declared by the app-server client."),
-    ] = None
-    mcp_server_openai_form_elicitation: Annotated[
-        bool | None,
-        Field(
-            alias="mcpServerOpenaiFormElicitation",
-            description="Legacy opt-in for the `openai/form` MCP extension.\n\nNew clients should declare `openai/form` in [`Self::extensions`].",
-        ),
-    ] = None
-    opt_out_notification_methods: Annotated[
-        list[str] | None,
-        Field(
-            alias="optOutNotificationMethods",
-            description="Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
-        ),
-    ] = None
-    request_attestation: Annotated[
-        bool | None,
-        Field(
-            alias="requestAttestation",
-            description="Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
-        ),
-    ] = False
-
-
-class InitializeParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    capabilities: InitializeCapabilities | None = None
-    client_info: Annotated[ClientInfo, Field(alias="clientInfo")]
 
 
 class InputModality(Enum):
@@ -3591,6 +3609,36 @@ class ProjectSortKey(Enum):
     recency_at = "recencyAt"
 
 
+class PwrdrvrTokenMiserActivation(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    enabled: bool
+    version: Annotated[int, Field(ge=0)]
+
+
+class PwrdrvrTokenMiserCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    code_mode_nested_post_tool_use: Annotated[bool, Field(alias="codeModeNestedPostToolUse")]
+    descriptor_environment_variable: Annotated[str, Field(alias="descriptorEnvironmentVariable")]
+    descriptor_version: Annotated[int, Field(alias="descriptorVersion", ge=0)]
+    identity: str
+    initialize_capability_field: Annotated[str, Field(alias="initializeCapabilityField")]
+    thread_resume_field: Annotated[str, Field(alias="threadResumeField")]
+    thread_start_field: Annotated[str, Field(alias="threadStartField")]
+    version: Annotated[int, Field(ge=0)]
+
+
+class PwrdrvrTokenMiserInitializeCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    activation_nonce: Annotated[str, Field(alias="activationNonce")]
+    version: Annotated[int, Field(ge=0)]
+
+
 class RateLimitReachedType(Enum):
     rate_limit_reached = "rate_limit_reached"
     workspace_owner_credits_depleted = "workspace_owner_credits_depleted"
@@ -4266,6 +4314,13 @@ class SendAddCreditsNudgeEmailResponse(BaseModel):
         populate_by_name=True,
     )
     status: AddCreditsNudgeEmailStatus
+
+
+class ServerCapabilitiesReadParams(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
 
 
 class ServerDiagnosticsGauge(BaseModel):
@@ -5840,6 +5895,13 @@ class ThreadResumeParams(BaseModel):
             description="@deprecated `friendly` and `pragmatic` no longer select a style. Changing this does not rewrite the thread's existing instructions."
         ),
     ] = None
+    pwrdrvr_token_miser: Annotated[
+        PwrdrvrTokenMiserActivation | None,
+        Field(
+            alias="pwrdrvrTokenMiser",
+            description="Change the PwrAgent-managed Token Miser activation for this loaded thread. Omission preserves the current state; explicit null disables it.",
+        ),
+    ] = None
     sandbox: SandboxMode | None = None
     service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
     thread_id: Annotated[str, Field(alias="threadId")]
@@ -6691,13 +6753,15 @@ class CancelLoginAccountResponse(BaseModel):
     status: CancelLoginAccountStatus
 
 
-class InitializeRequest(BaseModel):
+class ServerCapabilitiesReadRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Annotated[Literal["initialize"], Field(title="InitializeRequestMethod")]
-    params: InitializeParams
+    method: Annotated[
+        Literal["server/capabilities/read"], Field(title="Server/capabilities/readRequestMethod")
+    ]
+    params: ServerCapabilitiesReadParams
 
 
 class ThreadResumeRequest(BaseModel):
@@ -7518,6 +7582,50 @@ class FuzzyFileSearchRequest(BaseModel):
     params: FuzzyFileSearchParams
 
 
+class CodeModeOutputReducerAcceptanceCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    callback_version: Annotated[int, Field(alias="callbackVersion", ge=0)]
+    descriptor_url_field: Annotated[str, Field(alias="descriptorUrlField")]
+    direct_post_tool_use: Annotated[
+        DirectPostToolUseAcceptanceCapability, Field(alias="directPostToolUse")
+    ]
+    response_id_field: Annotated[str, Field(alias="responseIdField")]
+
+
+class CodeModeOutputReducerCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    acceptance: CodeModeOutputReducerAcceptanceCapability
+    actionable_state: Annotated[CodeModeActionableStateCapability, Field(alias="actionableState")]
+    config_key: Annotated[str, Field(alias="configKey")]
+    continuation_guidance_version: Annotated[int, Field(alias="continuationGuidanceVersion", ge=0)]
+    deferred_completion: Annotated[
+        CodeModeDeferredCompletionCapability, Field(alias="deferredCompletion")
+    ]
+    dynamic_tools_resume_field: Annotated[str, Field(alias="dynamicToolsResumeField")]
+    intent_context_version: Annotated[int, Field(alias="intentContextVersion", ge=0)]
+    max_output_tokens_ceiling_config_key: Annotated[
+        str, Field(alias="maxOutputTokensCeilingConfigKey")
+    ]
+    model_guidance: Annotated[
+        CodeModeOutputReducerModelGuidanceCapability, Field(alias="modelGuidance")
+    ]
+    post_tool_use_exact_output: Annotated[
+        CodeModePostToolUseExactOutputCapability, Field(alias="postToolUseExactOutput")
+    ]
+    post_tool_use_field: Annotated[str, Field(alias="postToolUseField")]
+    post_tool_use_grouping: Annotated[
+        CodeModePostToolUseGroupingCapability, Field(alias="postToolUseGrouping")
+    ]
+    post_tool_use_nested_context_field: Annotated[str, Field(alias="postToolUseNestedContextField")]
+    protocol_version: Annotated[int, Field(alias="protocolVersion", ge=0)]
+    reducer_request_field: Annotated[str, Field(alias="reducerRequestField")]
+    supports_thread_resume_overrides: Annotated[bool, Field(alias="supportsThreadResumeOverrides")]
+
+
 class ActiveTurnNotSteerable(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8328,6 +8436,59 @@ class HooksListResponse(BaseModel):
     data: list[HooksListEntry]
 
 
+class InitializeCapabilities(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    experimental_api: Annotated[
+        bool | None,
+        Field(
+            alias="experimentalApi",
+            description="Opt into receiving experimental API methods and fields.",
+        ),
+    ] = False
+    extensions: Annotated[
+        dict[str, Any] | None,
+        Field(description="MCP extension settings declared by the app-server client."),
+    ] = None
+    mcp_server_openai_form_elicitation: Annotated[
+        bool | None,
+        Field(
+            alias="mcpServerOpenaiFormElicitation",
+            description="Legacy opt-in for the `openai/form` MCP extension.\n\nNew clients should declare `openai/form` in [`Self::extensions`].",
+        ),
+    ] = None
+    opt_out_notification_methods: Annotated[
+        list[str] | None,
+        Field(
+            alias="optOutNotificationMethods",
+            description="Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
+        ),
+    ] = None
+    pwrdrvr_token_miser: Annotated[
+        PwrdrvrTokenMiserInitializeCapability | None,
+        Field(
+            alias="pwrdrvrTokenMiser",
+            description="Authenticate the narrowly scoped PwrAgent-managed Token Miser bridge.",
+        ),
+    ] = None
+    request_attestation: Annotated[
+        bool | None,
+        Field(
+            alias="requestAttestation",
+            description="Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+        ),
+    ] = False
+
+
+class InitializeParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    capabilities: InitializeCapabilities | None = None
+    client_info: Annotated[ClientInfo, Field(alias="clientInfo")]
+
+
 class ListMcpServerStatusParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8858,6 +9019,16 @@ class ScheduledTaskSummary(BaseModel):
     name: str
     prompt: str
     schedule: ScheduledTaskSchedule
+
+
+class ServerCapabilitiesReadResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    code_mode_output_reducer: Annotated[
+        CodeModeOutputReducerCapability, Field(alias="codeModeOutputReducer")
+    ]
+    pwrdrvr_token_miser: Annotated[PwrdrvrTokenMiserCapability, Field(alias="pwrdrvrTokenMiser")]
 
 
 class ThreadStatusChangedServerNotification(BaseModel):
@@ -10024,6 +10195,13 @@ class ThreadStartParams(BaseModel):
         Personality | None,
         Field(description="@deprecated `friendly` and `pragmatic` no longer select a style."),
     ] = None
+    pwrdrvr_token_miser: Annotated[
+        PwrdrvrTokenMiserActivation | None,
+        Field(
+            alias="pwrdrvrTokenMiser",
+            description="Activate only the PwrAgent-managed Token Miser bridge negotiated at initialize.",
+        ),
+    ] = None
     sandbox: SandboxMode | None = None
     service_name: Annotated[str | None, Field(alias="serviceName")] = None
     service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
@@ -10252,6 +10430,15 @@ class AppsListResponse(BaseModel):
             description="Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
         ),
     ] = None
+
+
+class InitializeRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["initialize"], Field(title="InitializeRequestMethod")]
+    params: InitializeParams
 
 
 class ThreadStartRequest(BaseModel):
@@ -12236,6 +12423,7 @@ class ExternalAgentConfigImportRecordHistoryRequest(BaseModel):
 class ClientRequest(
     RootModel[
         InitializeRequest
+        | ServerCapabilitiesReadRequest
         | ThreadStartRequest
         | ThreadResumeRequest
         | ThreadForkRequest
@@ -12343,6 +12531,7 @@ class ClientRequest(
     )
     root: Annotated[
         InitializeRequest
+        | ServerCapabilitiesReadRequest
         | ThreadStartRequest
         | ThreadResumeRequest
         | ThreadForkRequest

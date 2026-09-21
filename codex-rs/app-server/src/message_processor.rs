@@ -790,6 +790,7 @@ impl MessageProcessor {
                     },
                     /*app_server_client_name*/ None,
                     /*app_server_client_version*/ None,
+                    /*pwrdrvr_token_miser_activation_nonce*/ None,
                     ClientMcpExtensions::default(),
                 )
                 .await

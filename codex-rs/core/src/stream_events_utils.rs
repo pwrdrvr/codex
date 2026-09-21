@@ -358,11 +358,10 @@ pub(crate) async fn handle_output_item_done(
             let session = Arc::clone(&ctx.sess);
             let call_id = call.call_id.clone();
             let parent_intent_cleanup = DirectParentIntentCleanup { session, call_id };
+            let dispatched_tool = tool_runtime.handle_tool_call(call, cancellation_token);
             let tool_future: InFlightFuture<'static> = Box::pin(async move {
                 let _parent_intent_cleanup = parent_intent_cleanup;
-                tool_runtime
-                    .handle_tool_call(call, cancellation_token)
-                    .await
+                dispatched_tool.await
             });
 
             output.needs_follow_up = true;

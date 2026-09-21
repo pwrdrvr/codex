@@ -180,8 +180,8 @@ impl CodeModeWaitHandler {
                     .unwrap_or_else(|| started_at.elapsed());
                 handle_runtime_response(
                     &exec,
-            &call_id,
-            &step_context.settings.model_info,
+                    &call_id,
+                    &step_context.settings.model_info,
                     wait_response.into(),
                     args.max_tokens,
                     wall_time,

@@ -53,8 +53,8 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 
-use delegate::CodeModeCellDelegate;
 use actionable_state::ActionableStateStore;
+use delegate::CodeModeCellDelegate;
 use delegate::CodeModeDispatchBroker;
 use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
@@ -585,7 +585,7 @@ pub(super) async fn handle_runtime_response(
         cell_id = %context.cell_id,
         is_terminal,
         deferred_delivery = call_id != context.call_id,
-        elapsed_ms = started_at.elapsed().as_millis(),
+        elapsed_ms = wall_time.as_millis(),
         "code-mode runtime response reached the model-visible delivery boundary"
     );
 
@@ -975,9 +975,10 @@ mod tests {
 
     fn service(config: &CodeModeConfig) -> CodeModeService {
         CodeModeService::new(
+            codex_protocol::ThreadId::new(),
             Arc::new(DisabledCodeModeSessionProvider),
             config,
-            /*executed_tool_calls*/ None,
+            crate::tools::ExecutedToolCalls::default(),
         )
     }
 

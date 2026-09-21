@@ -5,6 +5,7 @@ import type { Personality } from "../Personality";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
+import type { PwrdrvrTokenMiserActivation } from "./PwrdrvrTokenMiserActivation";
 import type { SandboxMode } from "./SandboxMode";
 
 /**
@@ -30,7 +31,11 @@ model?: string | null, modelProvider?: string | null, serviceTier?: string | nul
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, /**
+approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, /**
+ * Change the PwrAgent-managed Token Miser activation for this loaded thread.
+ * Omission preserves the current state; explicit null disables it.
+ */
+pwrdrvrTokenMiser?: PwrdrvrTokenMiserActivation | null | null, baseInstructions?: string | null, developerInstructions?: string | null, /**
  * @deprecated `friendly` and `pragmatic` no longer select a style.
  * Changing this does not rewrite the thread's existing instructions.
  */
