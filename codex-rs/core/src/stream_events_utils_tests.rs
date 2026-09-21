@@ -465,7 +465,8 @@ async fn rejected_tool_call_discards_recorded_parent_intent() {
     ));
     let step_context = step_context.with_tool_router_for_test(router);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), Arc::clone(&step_context), tracker);
+    let tool_runtime =
+        ToolCallRuntime::new(Arc::clone(&session), Arc::clone(&step_context), tracker);
     let call_id = "rejected-parent-intent";
     let item = ResponseItem::FunctionCall {
         id: None,

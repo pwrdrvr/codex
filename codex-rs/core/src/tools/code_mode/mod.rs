@@ -54,8 +54,8 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 
-use delegate::CodeModeCellDelegate;
 use actionable_state::ActionableStateStore;
+use delegate::CodeModeCellDelegate;
 use delegate::CodeModeDispatchBroker;
 use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
@@ -931,9 +931,10 @@ mod tests {
 
     fn service(config: &CodeModeConfig) -> CodeModeService {
         CodeModeService::new(
+            codex_protocol::ThreadId::new(),
             Arc::new(DisabledCodeModeSessionProvider),
             config,
-            /*executed_tool_calls*/ None,
+            crate::tools::ExecutedToolCalls::default(),
         )
     }
 
