@@ -1,8 +1,8 @@
 use anyhow::Result;
 use codex_protocol::models::ConfigurationReasoning;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
-use codex_protocol::models::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
@@ -364,8 +364,16 @@ fn token_miser_output_round_trips_exact_structured_content_without_clone_amplifi
                     text: "line one\nline two\0".to_string(),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "data:image/png;base64,AAEC".to_string(),
+                    image: codex_protocol::models::ImageReference::Inline {
+                        image_url: "data:image/png;base64,AAEC".to_string(),
+                    },
                     detail: Some(codex_protocol::models::ImageDetail::Original),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image: codex_protocol::models::ImageReference::File {
+                        file_id: "file-exact-image-reference".to_string(),
+                    },
+                    detail: None,
                 },
                 FunctionCallOutputContentItem::EncryptedContent {
                     encrypted_content: "opaque-ciphertext".to_string(),
@@ -381,8 +389,8 @@ fn token_miser_output_round_trips_exact_structured_content_without_clone_amplifi
     };
     assert!(Arc::ptr_eq(original, cloned));
 
-    let encoded = serde_json::to_vec(&line)?;
-    let restored = serde_json::from_slice::<RolloutLine>(&encoded)?;
+    let encoded = serde_json::to_vec(&line.item)?;
+    let restored = serde_json::from_slice::<RolloutItem>(&encoded)?;
 
     assert_eq!(serde_json::to_vec(&restored)?, encoded);
     Ok(())

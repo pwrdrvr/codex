@@ -52,13 +52,10 @@ const LARGE_SUFFIX_BYTES: usize = 200_000;
 struct TokenMiserCodeModeProvider;
 
 impl code_mode::CodeModeSessionProvider for TokenMiserCodeModeProvider {
-    fn create_session<'a>(
-        &'a self,
-        delegate: Arc<dyn code_mode::CodeModeSessionDelegate>,
-    ) -> code_mode::CodeModeSessionProviderFuture<'a> {
+    fn create_session(&self) -> code_mode::CodeModeSessionProviderFuture<'_> {
         Box::pin(async move {
             Ok(Arc::new(TokenMiserCodeModeSession {
-                delegate,
+                pending_delegates: Default::default(),
                 next_cell: AtomicUsize::new(1),
             }) as Arc<dyn code_mode::CodeModeSession>)
         })
@@ -66,7 +63,9 @@ impl code_mode::CodeModeSessionProvider for TokenMiserCodeModeProvider {
 }
 
 struct TokenMiserCodeModeSession {
-    delegate: Arc<dyn code_mode::CodeModeSessionDelegate>,
+    pending_delegates: std::sync::Mutex<
+        std::collections::HashMap<code_mode::CellId, Arc<dyn code_mode::CodeModeSessionDelegate>>,
+    >,
     next_cell: AtomicUsize,
 }
 
@@ -74,17 +73,24 @@ impl code_mode::CodeModeSession for TokenMiserCodeModeSession {
     fn execute<'a>(
         &'a self,
         request: code_mode::ExecuteRequest,
+        delegate: Arc<dyn code_mode::CodeModeSessionDelegate>,
     ) -> code_mode::CodeModeSessionResultFuture<'a, code_mode::StartedCell> {
         let cell_id = code_mode::CellId::new(format!(
             "token-miser-test-cell-{}",
             self.next_cell.fetch_add(1, Ordering::SeqCst)
         ));
         let response_cell_id = cell_id.clone();
-        let delegate = Arc::clone(&self.delegate);
+        if request.source == DEFERRED_SCRIPT {
+            self.pending_delegates
+                .lock()
+                .unwrap()
+                .insert(cell_id.clone(), Arc::clone(&delegate));
+        }
         Box::pin(async move {
             Ok(code_mode::StartedCell::from_future(cell_id, async move {
                 if request.source == DEFERRED_SCRIPT {
                     return Ok(code_mode::RuntimeResponse::Yielded {
+                        code_mode_host_duration: Some(Duration::ZERO),
                         cell_id: response_cell_id,
                         content_items: vec![code_mode::FunctionCallOutputContentItem::InputText {
                             text: LIVE_PREVIEW.to_string(),
@@ -119,6 +125,7 @@ impl code_mode::CodeModeSession for TokenMiserCodeModeSession {
                 };
                 delegate.cell_closed(&response_cell_id);
                 Ok(code_mode::RuntimeResponse::Result {
+                    code_mode_host_duration: Some(Duration::ZERO),
                     cell_id: response_cell_id,
                     content_items: vec![code_mode::FunctionCallOutputContentItem::InputText {
                         text,
@@ -133,11 +140,18 @@ impl code_mode::CodeModeSession for TokenMiserCodeModeSession {
         &'a self,
         request: code_mode::WaitRequest,
     ) -> code_mode::CodeModeSessionResultFuture<'a, code_mode::WaitOutcome> {
-        let delegate = Arc::clone(&self.delegate);
+        let delegate = self
+            .pending_delegates
+            .lock()
+            .unwrap()
+            .remove(&request.cell_id);
         Box::pin(async move {
-            delegate.cell_closed(&request.cell_id);
+            if let Some(delegate) = delegate {
+                delegate.cell_closed(&request.cell_id);
+            }
             Ok(code_mode::WaitOutcome::LiveCell(
                 code_mode::RuntimeResponse::Result {
+                    code_mode_host_duration: Some(Duration::ZERO),
                     cell_id: request.cell_id,
                     content_items: vec![code_mode::FunctionCallOutputContentItem::InputText {
                         text: RAW_SECRET.to_string(),
@@ -155,6 +169,7 @@ impl code_mode::CodeModeSession for TokenMiserCodeModeSession {
         Box::pin(async move {
             Ok(code_mode::WaitOutcome::MissingCell(
                 code_mode::RuntimeResponse::Terminated {
+                    code_mode_host_duration: Some(Duration::ZERO),
                     cell_id,
                     content_items: Vec::new(),
                 },

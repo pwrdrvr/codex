@@ -9,6 +9,7 @@ use codex_history::TokenMiserDecisionRecord;
 use codex_history::TokenMiserOutput;
 use codex_history::TokenMiserStoredOutcome;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ImageReference;
 use serde_json::Value;
 use serde_json::json;
 use tokio::sync::OnceCell;
@@ -439,9 +440,12 @@ fn truncate_utf8_bytes(value: &str, max_bytes: usize) -> String {
 fn item_source(item: &FunctionCallOutputContentItem) -> (&'static str, &str, Option<Value>) {
     match item {
         FunctionCallOutputContentItem::InputText { text } => ("input_text", text, None),
-        FunctionCallOutputContentItem::InputImage { image_url, detail } => {
-            ("input_image", image_url, Some(json!(detail)))
-        }
+        FunctionCallOutputContentItem::InputImage { image, detail } => match image {
+            ImageReference::Inline { image_url } => ("input_image", image_url, Some(json!(detail))),
+            ImageReference::File { file_id } => {
+                ("input_image_file_id", file_id, Some(json!(detail)))
+            }
+        },
         FunctionCallOutputContentItem::InputAudio { audio_url } => ("input_audio", audio_url, None),
         FunctionCallOutputContentItem::EncryptedContent { encrypted_content } => {
             ("encrypted_content", encrypted_content, None)

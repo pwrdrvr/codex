@@ -53,6 +53,8 @@ pub(crate) fn serialize_tiered_input(
             | RolloutItem::WorldState(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::TokenUsageRecord(_)
+            | RolloutItem::TokenMiserOutput(_)
+            | RolloutItem::TokenMiserDecision(_)
             | RolloutItem::RetainedContext(_)
             | RolloutItem::EventMsg(_) => None,
         };

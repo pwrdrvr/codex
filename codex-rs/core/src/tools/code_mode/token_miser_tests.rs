@@ -105,6 +105,42 @@ fn retrieval_is_exact_bounded_and_thread_scoped() {
 }
 
 #[test]
+fn file_image_retrieval_preserves_reference_and_counts_its_storage_bytes() {
+    let owner = thread_id(9);
+    let mut raw = raw_output(owner, String::new());
+    raw.content_items = vec![FunctionCallOutputContentItem::InputImage {
+        image: ImageReference::File {
+            file_id: "file-image-42".to_string(),
+        },
+        detail: Some(codex_protocol::models::ImageDetail::Original),
+    }];
+    assert!(!output_fits_storage_bound(
+        [],
+        &raw.content_items,
+        /*max_items*/ 1,
+        /*max_source_bytes*/ 11,
+    ));
+    let service =
+        TokenMiserService::new([RolloutItem::TokenMiserOutput(Arc::new(raw))], Some(owner));
+    assert_eq!(
+        service
+            .read(owner, OBJECT_ID, 0, 0, 128)
+            .expect("image reference"),
+        json!({
+            "object_id": OBJECT_ID,
+            "item_index": 0,
+            "item_count": 1,
+            "kind": "input_image_file_id",
+            "detail": "original",
+            "offset": 0,
+            "content": "file-image-42",
+            "next_offset": null,
+            "total_bytes": 13,
+        })
+    );
+}
+
+#[test]
 fn restored_decision_is_reused_without_an_uncommitted_cell() {
     let owner = thread_id(4);
     let raw = raw_output(owner, "exact".to_string());
@@ -165,7 +201,9 @@ fn structured_output_storage_bound_rejects_adversarial_oversize_without_serializ
             text: "a\0b".to_string(),
         },
         FunctionCallOutputContentItem::InputImage {
-            image_url: "data:image/png;base64,AAEC".to_string(),
+            image: codex_protocol::models::ImageReference::Inline {
+                image_url: "data:image/png;base64,AAEC".to_string(),
+            },
             detail: None,
         },
         FunctionCallOutputContentItem::EncryptedContent {

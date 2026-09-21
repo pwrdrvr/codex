@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_rollout::TokenMiserOutput;
+use std::sync::Arc;
 #[tokio::test]
 async fn exact_token_miser_output_is_retained_but_excluded_from_model_context() {
     let home = TempDir::new().expect("temp dir");
