@@ -147,8 +147,14 @@ def run_smoke(host_path: Path) -> None:
             },
             "execute-start response",
         )
+        execute_response = read_frame(process.stdout, deadline)
+        host_duration_ns = execute_response["result"]["value"]["Result"][
+            "code_mode_host_duration_ns"
+        ]
+        if type(host_duration_ns) is not int or host_duration_ns < 0:
+            raise RuntimeError(f"invalid code-mode host duration: {host_duration_ns!r}")
         require_equal(
-            read_frame(process.stdout, deadline),
+            execute_response,
             {
                 "type": "execute/initialResponse",
                 "id": 2,
@@ -157,6 +163,7 @@ def run_smoke(host_path: Path) -> None:
                     "value": {
                         "Result": {
                             "cell_id": "1",
+                            "code_mode_host_duration_ns": host_duration_ns,
                             "content_items": [
                                 {"type": "input_text", "text": SMOKE_TEXT}
                             ],
