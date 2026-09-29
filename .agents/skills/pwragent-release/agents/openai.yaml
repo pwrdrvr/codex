@@ -1,0 +1,3 @@
+interface:
+  display_name: "PwrAgent Release"
+  short_description: "Publish and verify signed PwrAgent releases"
