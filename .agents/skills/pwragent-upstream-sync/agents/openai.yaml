@@ -1,0 +1,3 @@
+interface:
+  display_name: "PwrAgent Upstream Sync"
+  short_description: "Replay and validate PwrAgent upstream updates"
