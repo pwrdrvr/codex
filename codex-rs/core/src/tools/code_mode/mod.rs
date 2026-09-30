@@ -545,7 +545,9 @@ async fn handle_runtime_response(
 ) -> CodeModeToolOutput {
     let script_status = format_script_status(&response);
     let supports_original = can_request_original_image_detail(model_info);
-    let host_duration = response.code_mode_host_duration().filter(|_| experimental_show_cell_overhead);
+    let host_duration = response
+        .code_mode_host_duration()
+        .filter(|_| experimental_show_cell_overhead);
     // A yielded cell can produce more output, so keep its script; anything else
     // is finished with it.
     let is_terminal = !matches!(response, RuntimeResponse::Yielded { .. });
@@ -621,7 +623,11 @@ async fn handle_runtime_response(
     let (content_items, error_text) = match response {
         RuntimeResponse::Yielded { content_items, .. }
         | RuntimeResponse::Terminated { content_items, .. } => (content_items, None),
-        RuntimeResponse::Result { content_items, error_text, .. } => (content_items, error_text),
+        RuntimeResponse::Result {
+            content_items,
+            error_text,
+            ..
+        } => (content_items, error_text),
     };
     let mut content_items = into_function_call_output_content_items(content_items);
     sanitize_image_detail_items(supports_original, &mut content_items);
