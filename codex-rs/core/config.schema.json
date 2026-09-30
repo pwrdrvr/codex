@@ -580,12 +580,6 @@
           "description": "Show handler duration, code-mode host duration, and harness overhead in each code-mode cell response. Experimental: this option and the response format may change or be removed.",
           "type": "boolean"
         },
-        "tool_input_schema_max_bytes": {
-          "description": "Maximum UTF-8 bytes per rendered tool input type, with a 16,000-byte minimum and default. For ordinary MCP tools, this is also at least their server's explicitly configured input limit.",
-          "format": "uint",
-          "minimum": 1.0,
-          "type": "integer"
-        },
         "max_output_tokens_ceiling": {
           "description": "Host-side ceiling applied to the model-supplied code-mode output budget.\n\n`exec` and `wait` let the model pick `max_output_tokens` / `max_tokens`, so without a ceiling a model can ask for a budget large enough to defeat any reduction. When set, the effective budget is `min(model_request_or_default, ceiling)`.",
           "format": "uint",
@@ -599,6 +593,12 @@
             }
           ],
           "description": "Optional out-of-process reducer for code-mode output on its way into model context."
+        },
+        "tool_input_schema_max_bytes": {
+          "description": "Maximum UTF-8 bytes per rendered tool input type, with a 16,000-byte minimum and default. For ordinary MCP tools, this is also at least their server's explicitly configured input limit.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
         }
       },
       "type": "object"
