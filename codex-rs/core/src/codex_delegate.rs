@@ -41,6 +41,12 @@ use codex_protocol::turn_input::TurnStartOptions;
 #[cfg(test)]
 use crate::session::completed_session_loop_termination;
 
+#[derive(Clone, Copy)]
+pub(crate) enum DelegateUserInstructions {
+    Inherit,
+    Omit,
+}
+
 /// Start an interactive sub-Codex thread and return its runtime and IO channels.
 ///
 /// Delegates never request approvals, and the returned IO yields their public events.
@@ -56,6 +62,7 @@ pub(crate) async fn run_codex_thread_interactive(
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     isolation: codex_extension_api::SessionIsolation,
+    user_instructions_policy: DelegateUserInstructions,
     initial_history: Option<InitialHistory>,
     git_enrichment_policy: GitEnrichmentPolicy,
     windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
@@ -73,7 +80,10 @@ pub(crate) async fn run_codex_thread_interactive(
 
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
     let forked_from_thread_id = conversation_history.forked_from_id();
-    let instructions = parent_session.inherited_instructions().await;
+    let instructions = match user_instructions_policy {
+        DelegateUserInstructions::Inherit => parent_session.inherited_instructions().await,
+        DelegateUserInstructions::Omit => crate::agents_md_manager::SessionInstructions::default(),
+    };
     let session_source = SessionSource::SubAgent(subagent_source.clone());
     let is_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source);
     let extensions = if isolation == codex_extension_api::SessionIsolation::Isolated {
@@ -195,6 +205,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
+    user_instructions_policy: DelegateUserInstructions,
     final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
@@ -213,7 +224,11 @@ pub(crate) async fn run_codex_thread_one_shot(
         parent_environments,
         child_cancel.clone(),
         subagent_source,
-        codex_extension_api::SessionIsolation::Inherit,
+        match user_instructions_policy {
+            DelegateUserInstructions::Inherit => codex_extension_api::SessionIsolation::Inherit,
+            DelegateUserInstructions::Omit => codex_extension_api::SessionIsolation::Isolated,
+        },
+        user_instructions_policy,
         initial_history,
         GitEnrichmentPolicy::Fresh,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,

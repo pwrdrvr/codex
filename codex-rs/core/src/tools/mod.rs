@@ -73,6 +73,9 @@ pub(crate) fn tool_user_shell_type(
 }
 
 pub(crate) fn requested_tool_mode(turn_context: &TurnContext, model_info: &ModelInfo) -> ToolMode {
+    if turn_context.config.code_mode.token_miser.is_some() {
+        return ToolMode::CodeModeOnly;
+    }
     model_info.tool_mode.unwrap_or_else(|| {
         if turn_context.config.features.enabled(Feature::CodeModeOnly) {
             ToolMode::CodeModeOnly
@@ -82,6 +85,15 @@ pub(crate) fn requested_tool_mode(turn_context: &TurnContext, model_info: &Model
             ToolMode::Direct
         }
     })
+}
+
+/// Direct calls in internal reduction mode may only execute cells or explicitly retrieve data.
+pub(crate) fn token_miser_allows_direct_tool(tool_name: &ToolName) -> bool {
+    tool_name.is_default_namespace()
+        && matches!(
+            tool_name.name.as_str(),
+            "exec" | "wait" | "read_token_miser_output" | "search_token_miser_output"
+        )
 }
 
 pub(crate) fn effective_tool_mode(turn_context: &TurnContext, model_info: &ModelInfo) -> ToolMode {

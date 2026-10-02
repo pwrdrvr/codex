@@ -530,6 +530,14 @@ impl ToolRegistry {
         call_state: Option<Arc<ToolCallState>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
+        if invocation.turn.config.code_mode.token_miser.is_some()
+            && !matches!(invocation.source, ToolCallSource::CodeMode { .. })
+            && !super::token_miser_allows_direct_tool(&tool_name)
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "Token Miser requires tools to run through functions.exec; exact retained results may be read with the retrieval tools.".to_string(),
+            ));
+        }
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation
             .step_context

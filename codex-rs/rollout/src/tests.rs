@@ -51,6 +51,35 @@ const NO_SOURCE_FILTER: &[SessionSource] = &[];
 const TEST_PROVIDER: &str = "test-provider";
 
 #[test]
+fn token_miser_canonical_rollout_parser_preserves_structured_output() -> Result<()> {
+    let value = serde_json::json!({
+        "timestamp": "2025-01-03T12:00:00.000Z",
+        "ordinal": 8,
+        "type": "token_miser_output",
+        "payload": {
+            "version": 1,
+            "object_id": "00000000-0000-4000-8000-000000000001",
+            "thread_id": "00000000-0000-0000-0000-000000000042",
+            "turn_id": "turn-1",
+            "call_id": "call-1",
+            "cell_id": "cell-1",
+            "script_status": "Script completed",
+            "success": true,
+            "content_items": [
+                {"type": "input_text", "text": "exact\ntext\0界"},
+                {"type": "input_image", "image_url": "data:image/png;base64,AAEC", "detail": "original"},
+                {"type": "input_image", "file_id": "file-image-42"}
+            ]
+        }
+    });
+    let encoded = serde_json::to_vec(&value)?;
+    let decoded = crate::parse_rollout_line_bytes(&encoded)?;
+    assert!(matches!(&decoded.item, RolloutItem::TokenMiserOutput(_)));
+    assert_eq!(serde_json::to_value(decoded)?, value);
+    Ok(())
+}
+
+#[test]
 fn rollout_line_decoder_preserves_canonical_json_compatibility() -> Result<()> {
     let cases = [
         r#"{"timestamp":"2025-01-03T12:00:00.000Z","ordinal":7,"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":null,"limit_name":null,"primary":{"used_percent":0.0,"window_minutes":60,"resets_at":1800000000},"secondary":{"used_percent":12.5,"window_minutes":10080,"resets_at":1800100000},"credits":null,"individual_limit":null,"spend_control_reached":null,"plan_type":null,"rate_limit_reached_type":null}}}"#,

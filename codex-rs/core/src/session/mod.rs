@@ -1,4 +1,5 @@
 pub(crate) mod startup;
+mod token_miser_persistence;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -4563,6 +4564,48 @@ impl Session {
             return false;
         }
         true
+    }
+
+    /// Appends one exact Token Miser object and flushes it before any receipt can be exposed.
+    pub(crate) async fn persist_token_miser_output(
+        &self,
+        output: Arc<codex_history::TokenMiserOutput>,
+    ) -> bool {
+        let Some(live_thread) = self.live_thread() else {
+            return false;
+        };
+        if let Err(err) = live_thread
+            .append_items(&[RolloutItem::TokenMiserOutput(output)])
+            .await
+        {
+            error!(%err, "failed to append Token Miser output");
+            return false;
+        }
+        if let Err(err) = live_thread.persist(PersistContext::Standard).await {
+            error!(%err, "failed to persist Token Miser output");
+            return false;
+        }
+        true
+    }
+
+    /// Accounts a reducer once and queues its decision until it can be durably committed.
+    pub(crate) async fn commit_token_miser_decision(
+        &self,
+        turn_context: &TurnContext,
+        decision: codex_history::TokenMiserDecisionRecord,
+    ) -> bool {
+        {
+            let mut state = self.state.lock().await;
+            if let Some(usage) = decision.usage.as_ref() {
+                state.history.add_background_token_usage(usage);
+            }
+            state
+                .token_miser_pending_decisions
+                .insert(decision.object_id.clone(), decision);
+        }
+        let persisted = self.flush_pending_token_miser_decisions().await;
+        self.send_token_count_event(turn_context).await;
+        persisted
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {

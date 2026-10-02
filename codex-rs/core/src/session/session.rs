@@ -1625,6 +1625,8 @@ impl Session {
                     | RolloutItem::RealtimeItem(_)
                     | RolloutItem::TokenUsageRecord(_)
                     | RolloutItem::RetainedContext(_)
+                    | RolloutItem::TokenMiserOutput(_)
+                    | RolloutItem::TokenMiserDecision(_)
                     | RolloutItem::SecurityRiskScore(_) => {}
                 }
             }
@@ -1662,6 +1664,25 @@ impl Session {
             );
             let reasoning_effort_override_enabled =
                 config.features.enabled(Feature::ReasoningEffortOverride) && !title_request;
+            let token_miser_items = if config.code_mode.token_miser.is_some()
+                && matches!(initial_history, InitialHistory::Resumed(_))
+            {
+                match thread_store
+                    .load_token_miser_items(codex_thread_store::LoadThreadHistoryParams {
+                        thread_id,
+                        include_archived: true,
+                    })
+                    .await
+                {
+                    Ok(items) => items,
+                    Err(err) => {
+                        warn!(%err, "failed to restore Token Miser output catalog");
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
                 // published after SessionConfigured so MCP events follow it.
@@ -1753,11 +1774,14 @@ impl Session {
                     codex_responses_headers,
                 ),
                 executed_tool_calls: executed_tool_calls.clone(),
-                code_mode_service: crate::tools::code_mode::CodeModeService::new(
+                code_mode_service:
+                    crate::tools::code_mode::CodeModeService::new_with_token_miser_outputs(
                     thread_id,
                     Arc::clone(&code_mode_session_provider),
                     &config.code_mode,
                     executed_tool_calls,
+                    token_miser_items,
+                    Some(thread_id),
                 ),
                 tool_search_handler_cache: Default::default(),
                 turn_environments: Arc::clone(&turn_environments),

@@ -311,6 +311,9 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
+    if !sess.flush_pending_token_miser_decisions().await {
+        warn!("Token Miser accounting is still pending after shutdown retry");
+    }
     sess.stop_mcp_prewarm_worker().await;
     {
         let _refresh = sess.mcp_refresh.acquire().await;
@@ -337,6 +340,22 @@ async fn emit_thread_stop_lifecycle(sess: &Session) {
 
 pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
     shutdown_session_runtime(sess).await;
+    let has_unsaved_reducer_usage = !sess
+        .state
+        .lock()
+        .await
+        .token_miser_pending_decisions
+        .is_empty();
+    if has_unsaved_reducer_usage {
+        sess.send_event_raw(Event {
+            id: sub_id.clone(),
+            msg: EventMsg::Error(ErrorEvent {
+                misalignment: None,
+                message: "Token Miser accounting could not be saved; usage after resume may be incomplete.".to_string(),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            }),
+        }).await;
+    }
     info!("Shutting down Codex instance");
     let history = sess.clone_history().await;
     let turn_count = history

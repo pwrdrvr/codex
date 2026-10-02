@@ -594,6 +594,14 @@
           ],
           "description": "Optional out-of-process reducer for code-mode output on its way into model context."
         },
+        "token_miser": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/InProcessTokenMiserConfigToml"
+            }
+          ],
+          "description": "Optional Codex-owned Token Miser reducer. It is inert unless `enabled = true`."
+        },
         "tool_input_schema_max_bytes": {
           "description": "Maximum UTF-8 bytes per rendered tool input type, with a 16,000-byte minimum and default. For ordinary MCP tools, this is also at least their server's explicitly configured input limit.",
           "format": "uint",
@@ -2269,6 +2277,39 @@
             "$ref": "#/definitions/HookStateToml"
           },
           "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "InProcessTokenMiserConfigToml": {
+      "additionalProperties": false,
+      "description": "Configures model-invisible retention and in-process Luna reduction of Code Mode output.",
+      "properties": {
+        "enabled": {
+          "description": "Explicitly activates this experimental mode.",
+          "type": "boolean"
+        },
+        "max_reducer_input_bytes": {
+          "description": "Requested byte bound for the complete framed reducer-input item; Codex clamps it to 896 bytes so even token-dense UTF-8 remains below the 1K-token review threshold.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_replacement_bytes": {
+          "description": "Hard UTF-8 byte bound for a Luna replacement.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "Reducer model. Defaults to `gpt-6-luna`.",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "Total deadline for one reducer turn.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"
