@@ -67,7 +67,7 @@ pub struct InProcessTokenMiserConfigToml {
     /// Explicitly activates this experimental mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
-    /// Reducer model. Defaults to `gpt-5.6-luna`.
+    /// Reducer model. Defaults to `gpt-6-luna`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Total deadline for one reducer turn.

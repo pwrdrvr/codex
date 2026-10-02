@@ -204,7 +204,7 @@ fn is_captured_token_miser_request(request: &responses::ResponsesRequest) -> boo
 
 fn token_miser_config() -> InProcessTokenMiserConfig {
     InProcessTokenMiserConfig {
-        model: "gpt-5.6-luna".to_string(),
+        model: "gpt-6-luna".to_string(),
         timeout: Duration::from_secs(10),
         max_reducer_input_bytes: 128 * 1024,
         max_replacement_bytes: 4 * 1024,

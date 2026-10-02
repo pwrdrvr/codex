@@ -1191,7 +1191,7 @@ pub const DEFAULT_CODE_MODE_REDUCER_TOOL_DESCRIPTION_GUIDANCE: &str = concat!(
 );
 /// Hard cap for each consumer-provided model-guidance string.
 pub const CODE_MODE_REDUCER_GUIDANCE_MAX_CHARACTERS: usize = 512;
-pub const DEFAULT_TOKEN_MISER_MODEL: &str = "gpt-5.6-luna";
+pub const DEFAULT_TOKEN_MISER_MODEL: &str = "gpt-6-luna";
 pub const DEFAULT_TOKEN_MISER_TIMEOUT_MS: u64 = 20_000;
 /// Complete framed reducer input, including ContextualUserFragment markers. A byte can contribute
 /// at most one token, so 896 bytes stays below the 1K-token review threshold and the 10K hard cap.

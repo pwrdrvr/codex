@@ -76,17 +76,13 @@ async fn harbor_shaped_exec_includes_real_luna_reduction_in_root_usage() -> anyh
             "-c",
             "features.code_mode_host.enabled=true",
         ])
-        .args([
-            "-c",
-            "features.code_mode.token_miser.enabled=true",
-            "-c",
-            "features.code_mode.token_miser.model=\"gpt-5.6-luna\"",
-        ])
+        .args(["-c", "features.code_mode.token_miser.enabled=true"])
         .args(["--", "inspect the tool result"])
         .output()?;
     assert!(output.status.success(), "exec failed: {output:?}");
     let requests = exchange.requests();
     assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].body_json()["model"], "gpt-6-luna");
     assert!(
         requests[1]
             .body_json()

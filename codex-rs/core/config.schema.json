@@ -2302,7 +2302,7 @@
           "type": "integer"
         },
         "model": {
-          "description": "Reducer model. Defaults to `gpt-5.6-luna`.",
+          "description": "Reducer model. Defaults to `gpt-6-luna`.",
           "type": "string"
         },
         "timeout_ms": {
