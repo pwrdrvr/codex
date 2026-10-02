@@ -1668,23 +1668,13 @@ impl Session {
                 && matches!(initial_history, InitialHistory::Resumed(_))
             {
                 match thread_store
-                    .load_history(codex_thread_store::LoadThreadHistoryParams {
+                    .load_token_miser_items(codex_thread_store::LoadThreadHistoryParams {
                         thread_id,
                         include_archived: true,
                     })
                     .await
                 {
-                    Ok(history) => history
-                        .items
-                        .into_iter()
-                        .filter(|item| {
-                            matches!(
-                                item,
-                                RolloutItem::TokenMiserOutput(_)
-                                    | RolloutItem::TokenMiserDecision(_)
-                            )
-                        })
-                        .collect(),
+                    Ok(items) => items,
                     Err(err) => {
                         warn!(%err, "failed to restore Token Miser output catalog");
                         Vec::new()

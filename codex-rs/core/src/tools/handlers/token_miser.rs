@@ -135,7 +135,8 @@ impl ToolExecutor<ToolInvocation> for ReadTokenMiserOutputHandler {
                 .session
                 .services
                 .code_mode_service
-                .mark_token_miser_retrieval(&invocation.source);
+                .record_token_miser_retrieval(&invocation.source, &result)
+                .map_err(FunctionCallError::RespondToModel)?;
             Ok(boxed_tool_output(RetrievalOutput(result)))
         })
     }
@@ -202,7 +203,8 @@ impl ToolExecutor<ToolInvocation> for SearchTokenMiserOutputHandler {
                 .session
                 .services
                 .code_mode_service
-                .mark_token_miser_retrieval(&invocation.source);
+                .record_token_miser_retrieval(&invocation.source, &result)
+                .map_err(FunctionCallError::RespondToModel)?;
             Ok(boxed_tool_output(RetrievalOutput(result)))
         })
     }

@@ -1,4 +1,5 @@
 pub(crate) mod startup;
+mod token_miser_persistence;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -4587,58 +4588,24 @@ impl Session {
         true
     }
 
-    /// Persists a reducer decision and its updated absolute root usage total as one batch.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the session state lock makes the decision and absolute usage snapshot one durable transaction; live-thread persistence does not re-enter session state"
-    )]
+    /// Accounts a reducer once and queues its decision until it can be durably committed.
     pub(crate) async fn commit_token_miser_decision(
         &self,
         turn_context: &TurnContext,
         decision: codex_history::TokenMiserDecisionRecord,
     ) -> bool {
-        let Some(live_thread) = self.live_thread() else {
-            return false;
-        };
-        let mut state = self.state.lock().await;
-        let previous_token_info = state.token_info();
-        let token_count = decision.usage.as_ref().map(|usage| {
-            state.history.add_background_token_usage(usage);
-            let (info, rate_limits) = state.token_info_and_rate_limits();
-            EventMsg::TokenCount(TokenCountEvent { info, rate_limits })
-        });
-        let mut items = vec![RolloutItem::TokenMiserDecision(decision)];
-        if let Some(event) = token_count.as_ref() {
-            items.push(RolloutItem::EventMsg(event.clone()));
+        {
+            let mut state = self.state.lock().await;
+            if let Some(usage) = decision.usage.as_ref() {
+                state.history.add_background_token_usage(usage);
+            }
+            state
+                .token_miser_pending_decisions
+                .insert(decision.object_id.clone(), decision);
         }
-        if let Err(err) = live_thread.append_items(&items).await {
-            error!(%err, "failed to append Token Miser decision");
-            state.history.set_token_info(previous_token_info);
-            return false;
-        }
-        if let Err(err) = live_thread.persist(PersistContext::Standard).await {
-            error!(%err, "failed to persist Token Miser decision");
-            state.history.set_token_info(previous_token_info);
-            return false;
-        }
-        drop(state);
-        if let Some(msg) = token_count {
-            self.services
-                .rollout_thread_trace
-                .record_codex_turn_event(&turn_context.sub_id, &msg);
-            self.services
-                .rollout_thread_trace
-                .record_tool_call_event(turn_context.sub_id.clone(), &msg);
-            self.send_event_raw_with_persistence(
-                Event {
-                    id: turn_context.sub_id.clone(),
-                    msg,
-                },
-                /*persist*/ false,
-            )
-            .await;
-        }
-        true
+        let persisted = self.flush_pending_token_miser_decisions().await;
+        self.send_token_count_event(turn_context).await;
+        persisted
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {

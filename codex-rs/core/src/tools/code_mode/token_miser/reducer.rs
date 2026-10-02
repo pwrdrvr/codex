@@ -35,7 +35,6 @@ use super::truncate_utf8_bytes;
 /// Includes the ContextualUserFragment framing and remains below the 1K-token review threshold
 /// even when every UTF-8 source byte requires its own token.
 pub(super) const MAX_REDUCER_INPUT_BYTES: usize = 896;
-const MAX_REDUCER_ITEMS: usize = 32;
 const MAX_SCRIPT_BYTES: usize = 128;
 const MAX_SCRIPT_STATUS_BYTES: usize = 128;
 const REDUCER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -184,40 +183,53 @@ pub(super) fn reducer_input(
 ) -> Option<String> {
     let max_bytes = max_bytes.min(MAX_REDUCER_INPUT_BYTES);
     let body_limit = max_bytes.saturating_sub(128);
-    let script = context
+    let mut script = context
         .script
         .as_deref()
         .map(|script| truncate_utf8_bytes(script, MAX_SCRIPT_BYTES));
-    let script_status = truncate_utf8_bytes(&raw.script_status, MAX_SCRIPT_STATUS_BYTES);
-    let view_budget = body_limit.saturating_sub(512) / 6;
-    let per_item_budget = view_budget / raw.content_items.len().clamp(1, MAX_REDUCER_ITEMS);
-    let included_content_items = raw
-        .content_items
-        .iter()
-        .take(MAX_REDUCER_ITEMS)
-        .enumerate()
-        .map(|(index, item)| {
-            let (kind, source, _) = item_source(item);
-            ReducerContentItem {
-                index,
-                kind,
-                original_bytes: source.len(),
-                bounded_view: matches!(item, FunctionCallOutputContentItem::InputText { .. })
-                    .then(|| bounded_head_tail(source, per_item_budget)),
-            }
+    let mut script_status = truncate_utf8_bytes(&raw.script_status, MAX_SCRIPT_STATUS_BYTES);
+    // Sample only the first and last item. Every serialization below has at most two bounded
+    // strings, even if the durable object contains thousands of items or escape-dense text.
+    let mut indices = vec![0];
+    if raw.content_items.len() > 1 {
+        indices.push(raw.content_items.len() - 1);
+    }
+    let mut per_item_budget = 128;
+    loop {
+        let included_content_items = indices
+            .iter()
+            .filter_map(|&index| {
+                let item = raw.content_items.get(index)?;
+                let (kind, source, _) = item_source(item);
+                Some(ReducerContentItem {
+                    index,
+                    kind,
+                    original_bytes: source.len(),
+                    bounded_view: matches!(item, FunctionCallOutputContentItem::InputText { .. })
+                        .then(|| bounded_head_tail(source, per_item_budget)),
+                })
+            })
+            .collect();
+        let input = serde_json::to_string(&ReducerInput {
+            version: TOKEN_MISER_VERSION,
+            object_id: &raw.object_id,
+            script_status: &script_status,
+            script: script.as_deref(),
+            total_content_items: raw.content_items.len(),
+            included_content_items,
         })
-        .collect();
-    let input = serde_json::to_string(&ReducerInput {
-        version: TOKEN_MISER_VERSION,
-        object_id: &raw.object_id,
-        script_status: &script_status,
-        script: script.as_deref(),
-        total_content_items: raw.content_items.len(),
-        included_content_items,
-    })
-    .ok()?;
-    let rendered = TokenMiserReducerInput::new(input, body_limit)?.render();
-    (rendered.len() <= max_bytes).then_some(rendered)
+        .ok()?;
+        if let Some(fragment) = TokenMiserReducerInput::new(input, body_limit) {
+            let rendered = fragment.render();
+            return (rendered.len() <= max_bytes).then_some(rendered);
+        }
+        if per_item_budget == 0 {
+            return None;
+        }
+        per_item_budget /= 2;
+        script = script.map(|value| truncate_utf8_bytes(&value, per_item_budget));
+        script_status = truncate_utf8_bytes(&script_status, per_item_budget);
+    }
 }
 
 fn reducer_config(
@@ -270,6 +282,9 @@ fn reducer_config(
 }
 
 fn bounded_head_tail(value: &str, max_bytes: usize) -> String {
+    if max_bytes == 0 {
+        return String::new();
+    }
     if value.len() <= max_bytes {
         return value.to_string();
     }

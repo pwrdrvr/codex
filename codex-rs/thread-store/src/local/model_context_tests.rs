@@ -6,7 +6,7 @@ async fn exact_token_miser_output_is_retained_but_excluded_from_model_context() 
     let home = TempDir::new().expect("temp dir");
     let uuid = Uuid::from_u128(/*v*/ 1011);
     let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
-    let path = write_paginated_rollout(
+    let _path = write_paginated_rollout(
         home.path(),
         "2025-01-03T13-00-10",
         uuid,
@@ -27,9 +27,24 @@ async fn exact_token_miser_output_is_retained_but_excluded_from_model_context() 
         })
         .await
         .expect("load model context");
-    let full_history = read_thread::load_history_items(path.as_path())
+    let full_history = store
+        .load_token_miser_items(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
         .await
-        .expect("load full history");
+        .expect("load opaque catalog from paginated history");
+    assert_eq!(full_history.len(), 1);
+    assert!(
+        store
+            .load_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await
+            .is_err(),
+        "ordinary paginated history admission must stay unchanged"
+    );
 
     assert!(
         !context

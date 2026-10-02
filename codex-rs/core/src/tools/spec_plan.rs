@@ -569,6 +569,11 @@ fn build_model_visible_specs(
         }
 
         let tool_name = tool.runtime.tool_name();
+        if turn_context.config.code_mode.token_miser.is_some()
+            && !super::token_miser_allows_direct_tool(&tool_name)
+        {
+            continue;
+        }
         if is_hidden_by_code_mode_only(turn_context, model_info, &tool_name, exposure) {
             continue;
         }
@@ -628,7 +633,7 @@ fn hosted_model_tool_specs(
     registered_extension_tool_names: &[ToolName],
 ) -> Vec<ToolSpec> {
     // Responses Lite accepts schemas for client-executed tools, not hosted Responses tools.
-    if model_info.use_responses_lite {
+    if model_info.use_responses_lite || turn_context.config.code_mode.token_miser.is_some() {
         return Vec::new();
     }
 

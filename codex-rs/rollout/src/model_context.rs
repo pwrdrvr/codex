@@ -30,7 +30,10 @@ pub struct ModelContextScan {
 impl ModelContextScan {
     /// Adds the next newest-to-oldest rollout item and reports whether the reader can stop.
     pub fn push(&mut self, item: RolloutItem) -> ModelContextScanProgress {
-        if matches!(item, RolloutItem::TokenMiserOutput(_) | RolloutItem::TokenMiserDecision(_)) {
+        if matches!(
+            item,
+            RolloutItem::TokenMiserOutput(_) | RolloutItem::TokenMiserDecision(_)
+        ) {
             return ModelContextScanProgress::Continue;
         }
         let progress = if self.requires_full_replay {
@@ -59,5 +62,4 @@ impl ModelContextScan {
         self.items_newest_first.reverse();
         self.items_newest_first
     }
-
 }

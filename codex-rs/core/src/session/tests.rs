@@ -1,6 +1,8 @@
 use crate::agent::LocalAgentControl;
 #[path = "notification_tests.rs"]
 mod notification_tests;
+#[path = "token_miser_accounting_tests.rs"]
+mod token_miser_accounting_tests;
 
 use super::mcp_refresh::McpRefresh;
 #[path = "turn_start_mcp_tests.rs"]

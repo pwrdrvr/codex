@@ -2,6 +2,9 @@
 
 #![allow(clippy::unwrap_used)]
 
+#[path = "in_process_token_miser_persistence.rs"]
+mod persistence;
+
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::TurnInputRequest;
@@ -46,6 +49,7 @@ const RAW_TAIL: &str = "-may-release";
 const HIDDEN_REASONING: &str = "private parent reasoning must never reach token miser";
 const DEFERRED_SCRIPT: &str = "deferred-token-miser-result";
 const LIVE_PREVIEW: &str = "bounded live preview";
+const UNRETRIEVED_SECRET: &str = "unrelated-output-must-not-pass-with-retrieval";
 const LARGE_SCRIPT: &str = "large-token-miser-result";
 const LARGE_SUFFIX_BYTES: usize = 200_000;
 
@@ -74,6 +78,7 @@ impl code_mode::CodeModeSession for TokenMiserCodeModeSession {
         &'a self,
         request: code_mode::ExecuteRequest,
         delegate: Arc<dyn code_mode::CodeModeSessionDelegate>,
+        _cancel_token: Option<CancellationToken>,
     ) -> code_mode::CodeModeSessionResultFuture<'a, code_mode::StartedCell> {
         let cell_id = code_mode::CellId::new(format!(
             "token-miser-test-cell-{}",
@@ -118,6 +123,7 @@ impl code_mode::CodeModeSession for TokenMiserCodeModeSession {
                         )
                         .await?
                         .to_string()
+                        + UNRETRIEVED_SECRET
                 } else if request.source == LARGE_SCRIPT {
                     format!("{RAW_SECRET}{}", "x".repeat(LARGE_SUFFIX_BYTES))
                 } else {
@@ -139,6 +145,7 @@ impl code_mode::CodeModeSession for TokenMiserCodeModeSession {
     fn wait<'a>(
         &'a self,
         request: code_mode::WaitRequest,
+        _cancel_token: Option<CancellationToken>,
     ) -> code_mode::CodeModeSessionResultFuture<'a, code_mode::WaitOutcome> {
         let delegate = self
             .pending_delegates
@@ -286,7 +293,9 @@ fn assert_luna_received_only_the_bounded_raw_view(body: &Value) {
     let serialized = body.to_string();
     assert!(serialized.contains(RAW_HEAD));
     assert!(serialized.contains(RAW_TAIL));
-    assert!(!serialized.contains(RAW_SECRET));
+    // A small result fits in full; the hard bound applies to large inputs, not to a mandatory
+    // omission of otherwise useful short text supplied to the isolated reducer.
+    assert!(!serialized.contains(HIDDEN_REASONING));
 }
 
 fn tool_output_for_call(body: &Value, call_id: &str) -> String {
@@ -469,6 +478,7 @@ async fn immediate_replacement_takes_precedence_over_managed_reducer_without_rea
         retrieval_visible.contains(RAW_SECRET),
         "retrieval output: {retrieval_visible}"
     );
+    assert!(!retrieval_visible.contains(UNRETRIEVED_SECRET));
     let resumed_history = resumed
         .thread_store
         .load_history(LoadThreadHistoryParams {
@@ -501,30 +511,91 @@ async fn immediate_replacement_takes_precedence_over_managed_reducer_without_rea
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn token_miser_blocks_direct_tool_bypass() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let exchange = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("direct-parent"),
+                ev_function_call(
+                    "direct-call",
+                    "exec_command",
+                    r#"{"cmd":"echo unfiltered-direct-output"}"#,
+                ),
+                ev_completed("direct-parent"),
+            ]),
+            sse(vec![
+                ev_response_created("direct-final"),
+                ev_assistant_message("direct-answer", "done"),
+                ev_completed("direct-final"),
+            ]),
+        ],
+    )
+    .await;
+    let test = token_miser_test_builder()
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("inspect the output").await?;
+    let requests = exchange.requests();
+    assert_eq!(requests.len(), 2);
+    let output = output_text(&requests[1].function_call_output("direct-call")["output"]);
+    assert!(
+        output.contains("Token Miser requires"),
+        "direct call output: {output}"
+    );
+    assert!(!output.contains("unfiltered-direct-output"));
+    assert!(
+        !requests[0].body_json()["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .any(|tool| tool["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("web_search")))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn direct_small_large_passthrough_and_failure_outputs_remain_exact() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for (case, script, reducer_answer, expect_raw_visible, expected_bytes) in [
+    for (case, script, reducer_answer, expected_outcome, expected_text) in [
         (
             "passthrough",
             "text('fixture output')",
             r#"{"decision":"passthrough","replacement":null}"#,
-            true,
-            RAW_SECRET.len(),
+            TokenMiserStoredOutcome::Passthrough,
+            RAW_SECRET.to_string(),
         ),
         (
             "malformed",
             "text('fixture output')",
             "not valid reducer json",
-            false,
-            RAW_SECRET.len(),
+            TokenMiserStoredOutcome::Hide {
+                reason: "retained; reducer output was invalid".to_string(),
+            },
+            RAW_SECRET.to_string(),
         ),
         (
             "large",
             LARGE_SCRIPT,
             r#"{"decision":"replace","replacement":"bounded large result"}"#,
-            false,
-            RAW_SECRET.len() + LARGE_SUFFIX_BYTES,
+            TokenMiserStoredOutcome::Replace {
+                replacement: "bounded large result".to_string(),
+            },
+            format!("{RAW_SECRET}{}", "x".repeat(LARGE_SUFFIX_BYTES)),
+        ),
+        (
+            "tiny-budget",
+            "// @exec: {\"max_output_tokens\": 1}\ntext('fixture output')",
+            r#"{"decision":"replace","replacement":"bounded replacement with several words"}"#,
+            TokenMiserStoredOutcome::Replace {
+                replacement: "bounded replacement with several words".to_string(),
+            },
+            RAW_SECRET.to_string(),
         ),
     ] {
         let server = responses::start_mock_server().await;
@@ -563,7 +634,20 @@ async fn direct_small_large_passthrough_and_failure_outputs_remain_exact() -> Re
             .expect("Luna request should contain one framed Token Miser input");
         assert!(framed_input.len() <= 896);
         let visible = tool_output_for_call(&requests[2].body_json(), "exec-case");
+        let expect_raw_visible = matches!(expected_outcome, TokenMiserStoredOutcome::Passthrough);
         assert_eq!(visible.contains(RAW_SECRET), expect_raw_visible);
+        if let TokenMiserStoredOutcome::Replace { replacement } = &expected_outcome {
+            if case == "tiny-budget" {
+                assert!(
+                    !visible.contains(replacement),
+                    "data must obey the tiny requested budget"
+                );
+            } else {
+                assert!(visible.contains(replacement));
+            }
+            assert!(visible.contains("<untrusted_tool_output>"));
+            assert!(visible.contains("</untrusted_tool_output>"));
+        }
         assert!(visible.contains("Exact output object:"));
         let history = test
             .thread_store
@@ -594,12 +678,8 @@ async fn direct_small_large_passthrough_and_failure_outputs_remain_exact() -> Re
         else {
             panic!("expected exact persisted text output");
         };
-        assert_eq!(text.len(), expected_bytes);
-        assert_eq!(outcomes.len(), 1);
-        assert_eq!(
-            matches!(outcomes[0], TokenMiserStoredOutcome::Passthrough),
-            expect_raw_visible
-        );
+        assert_eq!(text, &expected_text);
+        assert_eq!(outcomes, vec![&expected_outcome]);
     }
 
     Ok(())
@@ -661,7 +741,7 @@ async fn yielded_exec_is_reduced_once_only_after_terminal_wait() -> Result<()> {
     let live = tool_output_for_call(&first_requests[1].body_json(), "exec-deferred");
     assert!(!live.contains(LIVE_PREVIEW));
     assert!(live.contains("Script running with cell ID token-miser-test-cell-1"));
-    assert!(!live.contains("Exact output object:"));
+    assert!(live.contains("Exact output object:"));
 
     test.submit_turn("collect the deferred result").await?;
 
@@ -679,13 +759,16 @@ async fn yielded_exec_is_reduced_once_only_after_terminal_wait() -> Result<()> {
             include_archived: true,
         })
         .await?;
+    assert!(history.items.iter().any(|item| matches!(item,
+        RolloutItem::TokenMiserOutput(raw) if raw.content_items == vec![ProtocolFunctionCallOutputContentItem::InputText { text: LIVE_PREVIEW.to_string() }]
+    )));
     assert_eq!(
         history
             .items
             .iter()
             .filter(|item| matches!(item, RolloutItem::TokenMiserOutput(_)))
             .count(),
-        1
+        2
     );
     assert_eq!(
         history
@@ -700,7 +783,7 @@ async fn yielded_exec_is_reduced_once_only_after_terminal_wait() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn parallel_terminals_have_unique_objects_and_exact_once_usage() -> Result<()> {
+async fn multiple_terminal_calls_have_unique_objects_and_exact_once_usage() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -863,14 +946,8 @@ async fn cancellation_does_not_drop_or_repeat_reducer_accounting() -> Result<()>
         matches!(event, EventMsg::TurnAborted(_))
     })
     .await;
-    wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::TokenCount(event)
-                if event.info.as_ref().is_some_and(|info| info.total_token_usage.total_tokens == 3)
-        )
-    })
-    .await;
+    // Real CLI interruption immediately shuts the session down; it does not wait for late usage.
+    test.codex.shutdown_and_wait().await?;
 
     let history = test
         .thread_store

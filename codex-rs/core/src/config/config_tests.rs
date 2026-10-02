@@ -733,6 +733,38 @@ max_replacement_bytes = 999999
 }
 
 #[tokio::test]
+async fn token_miser_rejects_ephemeral_storage_but_disabled_mode_remains_compatible()
+-> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    for enabled in [false, true] {
+        let config_toml: ConfigToml = toml::from_str(&format!(
+            "[features.code_mode.token_miser]\nenabled = {enabled}\n"
+        ))
+        .expect("config");
+        let loaded = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides {
+                ephemeral: Some(true),
+                ..Default::default()
+            },
+            codex_home.abs(),
+        )
+        .await;
+        if enabled {
+            let err = loaded.expect_err("exact output requires durable storage");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(
+                err.to_string()
+                    .contains("Token Miser requires durable session storage")
+            );
+        } else {
+            assert!(loaded?.ephemeral);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn token_miser_requires_explicit_enabled_true() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     let config_toml: ConfigToml = toml::from_str(

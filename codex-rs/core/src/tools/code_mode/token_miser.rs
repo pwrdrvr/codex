@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -13,6 +12,7 @@ use codex_protocol::models::ImageReference;
 use serde_json::Value;
 use serde_json::json;
 use tokio::sync::OnceCell;
+use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
 use crate::config::InProcessTokenMiserConfig;
@@ -25,6 +25,7 @@ use crate::session::turn_context::TurnContext;
 use super::ReductionContext;
 
 mod reducer;
+mod retention;
 
 const TOKEN_MISER_VERSION: u32 = 1;
 const MAX_READ_BYTES: usize = 8 * 1024;
@@ -62,7 +63,8 @@ enum TokenMiserDecision {
 pub(super) struct TokenMiserService {
     outputs: Arc<RwLock<HashMap<String, Arc<TokenMiserOutput>>>>,
     terminal_cells: Arc<Mutex<HashMap<TerminalKey, Arc<OutputState>>>>,
-    explicit_retrieval_cells: Arc<Mutex<HashSet<String>>>,
+    explicit_retrieval_cells: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    pending_tasks: TaskTracker,
 }
 
 impl TokenMiserService {
@@ -105,6 +107,13 @@ impl TokenMiserService {
                 continue;
             }
             outputs.insert(raw.object_id.clone(), Arc::clone(&raw));
+            // Live observations are immutable retrieval objects, not terminal decisions.
+            if raw
+                .script_status
+                .starts_with("Script running with cell ID ")
+            {
+                continue;
+            }
             terminal_cells.entry(terminal_key(&raw)).or_insert_with(|| {
                 let stored_decision = decisions
                     .get(&raw.object_id)
@@ -131,19 +140,15 @@ impl TokenMiserService {
             outputs: Arc::new(RwLock::new(outputs)),
             terminal_cells: Arc::new(Mutex::new(terminal_cells)),
             explicit_retrieval_cells: Arc::default(),
+            pending_tasks: TaskTracker::new(),
         }
     }
 
-    pub(super) fn mark_explicit_retrieval(&self, cell_id: &str) {
-        if let Ok(mut cells) = self.explicit_retrieval_cells.lock() {
-            cells.insert(cell_id.to_string());
-        }
-    }
-
-    pub(super) fn take_explicit_retrieval(&self, cell_id: &str) -> bool {
-        self.explicit_retrieval_cells
-            .lock()
-            .is_ok_and(|mut cells| cells.remove(cell_id))
+    /// Called after parent tool tasks are stopped, and before the rollout writer closes.
+    /// Dropping a tool's JoinHandle must not cancel an already incurred reducer charge.
+    pub(super) async fn shutdown(&self) {
+        self.pending_tasks.close();
+        self.pending_tasks.wait().await;
     }
 
     pub(super) async fn reduce_terminal(
@@ -210,7 +215,7 @@ impl TokenMiserService {
         let context = context.clone();
         let task_config = config.clone();
         let task_state = Arc::clone(&state);
-        let resolution = tokio::spawn(async move {
+        let resolution = self.pending_tasks.spawn(async move {
             service
                 .resolve_terminal(&session, &turn, &context, &task_config, &task_state)
                 .await
@@ -232,12 +237,16 @@ impl TokenMiserService {
             }
             TokenMiserDecision::Replace(replacement) => {
                 let replacement = truncate_utf8_bytes(&replacement, config.max_replacement_bytes);
-                let mut items = vec![
+                // Truncate untrusted data before adding trusted framing, even for a tiny budget.
+                let mut items = super::truncate_code_mode_result(
+                    vec![FunctionCallOutputContentItem::InputText { text: replacement }],
+                    max_output_tokens,
+                );
+                items.insert(
+                    0,
                     CodeModeOutputReplacementFence::opening().into_output_item(),
-                    FunctionCallOutputContentItem::InputText { text: replacement },
-                    CodeModeOutputReplacementFence::closing().into_output_item(),
-                ];
-                items = super::truncate_code_mode_result(items, max_output_tokens);
+                );
+                items.push(CodeModeOutputReplacementFence::closing().into_output_item());
                 items
             }
             TokenMiserDecision::Hide(_) => Vec::new(),
@@ -312,10 +321,16 @@ impl TokenMiserService {
         if offset > source.len() || !source.is_char_boundary(offset) {
             return Err("offset must be a UTF-8 boundary within the selected item".to_string());
         }
-        let requested_bytes = requested_bytes.clamp(1, MAX_READ_BYTES);
+        // Six-byte JSON escaping plus metadata must fit the framed retrieval budget.
+        let requested_bytes = requested_bytes.clamp(1, 1024);
         let mut end = offset.saturating_add(requested_bytes).min(source.len());
         while end > offset && !source.is_char_boundary(end) {
             end -= 1;
+        }
+        if end == offset && offset < source.len() {
+            return Err(
+                "max_bytes must accommodate the next UTF-8 character (up to 4 bytes)".to_string(),
+            );
         }
         Ok(json!({
             "object_id": object_id,
@@ -349,15 +364,24 @@ impl TokenMiserService {
             let FunctionCallOutputContentItem::InputText { text } = item else {
                 continue;
             };
+            let mut line_offset = 0;
             for (line_index, line) in text.split_inclusive('\n').enumerate() {
+                let current_offset = line_offset;
+                line_offset += line.len();
                 let Some(column) = line.find(query) else {
                     continue;
                 };
+                let mut snippet_start = column.saturating_sub(MAX_SEARCH_SNIPPET_BYTES / 4);
+                while !line.is_char_boundary(snippet_start) {
+                    snippet_start += 1;
+                }
                 matches.push(json!({
                     "item_index": item_index,
                     "line": line_index + 1,
                     "column": column,
-                    "snippet": truncate_utf8_bytes(line, MAX_SEARCH_SNIPPET_BYTES),
+                    "offset": current_offset + column,
+                    "snippet_offset": current_offset + snippet_start,
+                    "snippet": truncate_utf8_bytes(&line[snippet_start..], MAX_SEARCH_SNIPPET_BYTES),
                 }));
                 if matches.len() == max_results {
                     break;
@@ -374,7 +398,7 @@ impl TokenMiserService {
                 "matches": &matches,
                 "max_results": max_results,
             });
-            if result.to_string().len() <= MAX_READ_BYTES || matches.pop().is_none() {
+            if result.to_string().len() <= MAX_READ_BYTES - 128 || matches.pop().is_none() {
                 return Ok(result);
             }
         }

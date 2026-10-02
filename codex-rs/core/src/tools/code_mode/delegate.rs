@@ -143,6 +143,7 @@ impl CodeModeDispatchBroker {
                         call_id,
                         cell_id,
                         text,
+                        step_context,
                         output_token_limit,
                         cancellation_token,
                         response_tx,
@@ -154,8 +155,15 @@ impl CodeModeDispatchBroker {
                         )
                         .await
                         {
-                            host.notify(call_id, cell_id, text, output_token_limit)
-                                .await
+                            let step_context = step_context.upgrade();
+                            host.notify(
+                                call_id,
+                                cell_id,
+                                text,
+                                output_token_limit,
+                                step_context.as_deref(),
+                            )
+                            .await
                         } else {
                             remove_dispatch_gate(&dispatch_gates, &cell_id);
                             Err("code mode notification cancelled".to_string())
@@ -377,6 +385,7 @@ impl CodeModeSessionDelegate for CodeModeCellDelegate {
                     call_id,
                     cell_id,
                     text,
+                    step_context: Arc::downgrade(&self.step_context),
                     output_token_limit: with_serialization_allowance(
                         self.step_context
                             .settings
@@ -418,6 +427,7 @@ enum DispatchMessage {
         call_id: String,
         cell_id: CellId,
         text: String,
+        step_context: Weak<StepContext>,
         output_token_limit: usize,
         cancellation_token: CancellationToken,
         response_tx: oneshot::Sender<Result<(), String>>,
@@ -467,17 +477,63 @@ impl CoreTurnHost {
         cell_id: CellId,
         text: String,
         output_token_limit: usize,
+        step_context: Option<&StepContext>,
     ) -> Result<(), String> {
         if text.trim().is_empty() {
             return Ok(());
         }
+        let output = if self
+            .session
+            .services
+            .code_mode_service
+            .reduction_config()
+            .token_miser
+            .is_some()
+        {
+            let step_context = step_context
+                .ok_or_else(|| "code mode notification step is no longer available".to_string())?;
+            let script_status = format!("Script running with cell ID {cell_id}");
+            let context = super::ReductionContext {
+                thread_id: self.session.thread_id.to_string(),
+                turn_id: step_context.turn.sub_id.clone(),
+                call_id: call_id.clone(),
+                cell_id: cell_id.to_string(),
+                script: None,
+                parent_intent: None,
+                actionable_state: None,
+                script_status: script_status.clone(),
+            };
+            let items = self
+                .session
+                .services
+                .code_mode_service
+                .token_miser
+                .retain_unreduced(
+                    &self.session,
+                    &context,
+                    super::token_miser::TerminalOutput {
+                        script_status: &script_status,
+                        success: Some(true),
+                        content_items: vec![
+                            codex_protocol::models::FunctionCallOutputContentItem::InputText {
+                                text,
+                            },
+                        ],
+                        max_output_tokens: None,
+                    },
+                )
+                .await;
+            FunctionCallOutputPayload::from_content_items(items)
+        } else {
+            FunctionCallOutputPayload::from_text(text)
+        };
         self.session
             .inject_if_running(vec![ResponseItemEnvelope {
                 item: ResponseItem::CustomToolCallOutput {
                     id: None,
                     call_id,
                     name: Some(PUBLIC_TOOL_NAME.to_string()),
-                    output: FunctionCallOutputPayload::from_text(text),
+                    output,
                     internal_chat_message_metadata_passthrough: None,
                 },
                 metadata: Some(CodexHarnessMetadata {

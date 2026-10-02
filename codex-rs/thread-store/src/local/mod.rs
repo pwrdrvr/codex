@@ -574,6 +574,39 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { model_context::load_latest_model_context(self, params).await })
     }
 
+    fn load_token_miser_items(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreFuture<'_, Vec<codex_rollout::RolloutItem>> {
+        Box::pin(async move {
+            let thread = read_thread::read_thread(
+                self,
+                ReadThreadParams {
+                    thread_id: params.thread_id,
+                    include_archived: params.include_archived,
+                    include_history: false,
+                },
+            )
+            .await?;
+            let path = thread
+                .rollout_path
+                .ok_or_else(|| ThreadStoreError::Internal {
+                    message: format!("thread {} has no rollout", params.thread_id),
+                })?;
+            Ok(read_thread::load_history_items(&path)
+                .await?
+                .into_iter()
+                .filter(|item| {
+                    matches!(
+                        item,
+                        codex_rollout::RolloutItem::TokenMiserOutput(_)
+                            | codex_rollout::RolloutItem::TokenMiserDecision(_)
+                    )
+                })
+                .collect())
+        })
+    }
+
     fn prepare_fork(&self, params: PrepareForkParams) -> ThreadStoreFuture<'_, PreparedFork> {
         Box::pin(async move { paginated_fork::prepare(self, params).await })
     }

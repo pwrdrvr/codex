@@ -206,10 +206,15 @@ impl CodeModeService {
         }
     }
 
-    pub(crate) fn mark_token_miser_retrieval(&self, source: &ToolCallSource) {
+    pub(crate) fn record_token_miser_retrieval(
+        &self,
+        source: &ToolCallSource,
+        result: &serde_json::Value,
+    ) -> Result<(), String> {
         if let ToolCallSource::CodeMode { cell_id, .. } = source {
-            self.token_miser.mark_explicit_retrieval(cell_id);
+            self.token_miser.record_retrieval(cell_id, result)?;
         }
+        Ok(())
     }
 
     pub(crate) fn read_token_miser_output(
@@ -502,7 +507,7 @@ impl CodeModeService {
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
         self.shutdown_token.cancel();
         // Join any initialization already in progress without initializing an unused service.
-        match self
+        let result = match self
             .session
             .get_or_try_init(|| async {
                 Err::<Arc<dyn CodeModeSession>, String>(
@@ -513,7 +518,9 @@ impl CodeModeService {
         {
             Ok(session) => session.shutdown().await,
             Err(_) => Ok(()),
-        }
+        };
+        self.token_miser.shutdown().await;
+        result
     }
 
     pub(crate) fn mark_cell_ready_for_dispatch(
@@ -678,7 +685,9 @@ async fn handle_runtime_response(
         } => (content_items, error_text),
     };
     let mut content_items = into_function_call_output_content_items(content_items);
-    sanitize_image_detail_items(supports_original, &mut content_items);
+    if reduction_config.token_miser.is_none() {
+        sanitize_image_detail_items(supports_original, &mut content_items);
+    }
     let success = error_text.is_none();
     if let Some(error_text) = error_text {
         content_items.push(FunctionCallOutputContentItem::InputText {
@@ -698,6 +707,7 @@ async fn handle_runtime_response(
         },
     )
     .await;
+    sanitize_image_detail_items(supports_original, &mut content_items);
     CodeModeToolOutput::new(
         FunctionToolOutput::from_content(content_items, Some(success)),
         script_status,
@@ -727,7 +737,21 @@ async fn reduce_code_mode_result(
         ReductionBoundary::Terminal => reduction_config.output_reducer.as_ref(),
     };
     if matches!(boundary, ReductionBoundary::Live) && reduction_config.token_miser.is_some() {
-        return match context.actionable_state.as_ref() {
+        let service = &exec.session.services.code_mode_service.token_miser;
+        let mut visible = service
+            .retain_unreduced(
+                &exec.session,
+                context,
+                token_miser::TerminalOutput {
+                    script_status,
+                    success,
+                    content_items,
+                    max_output_tokens,
+                },
+            )
+            .await;
+        visible.extend(service.take_retrieval(&context.cell_id).unwrap_or_default());
+        visible.extend(match context.actionable_state.as_ref() {
             Some(state) => state.output_items().unwrap_or_else(|| {
                 tracing::warn!(
                     "Codex-owned actionable state was not renderable at Token Miser boundary"
@@ -735,7 +759,8 @@ async fn reduce_code_mode_result(
                 Vec::new()
             }),
             None => Vec::new(),
-        };
+        });
+        return visible;
     }
     if matches!(boundary, ReductionBoundary::Terminal)
         && let Some(token_miser_config) = reduction_config.token_miser.as_ref()
@@ -756,14 +781,30 @@ async fn reduce_code_mode_result(
             },
             None => Vec::new(),
         };
-        if exec
+        if let Some(retrieved) = exec
             .session
             .services
             .code_mode_service
             .token_miser
-            .take_explicit_retrieval(&context.cell_id)
+            .take_retrieval(&context.cell_id)
         {
-            let mut visible = truncate_code_mode_result(content_items, max_output_tokens);
+            let mut visible = exec
+                .session
+                .services
+                .code_mode_service
+                .token_miser
+                .retain_unreduced(
+                    &exec.session,
+                    context,
+                    token_miser::TerminalOutput {
+                        script_status,
+                        success,
+                        content_items,
+                        max_output_tokens,
+                    },
+                )
+                .await;
+            visible.extend(retrieved);
             visible.extend(actionable_output_items);
             return visible;
         }

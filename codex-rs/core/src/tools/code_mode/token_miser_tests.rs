@@ -62,6 +62,46 @@ fn reducer_input_is_hard_bounded_and_omits_the_middle_of_large_text() {
 }
 
 #[test]
+fn reducer_input_selects_bounded_items_instead_of_rejecting_many_small_results() {
+    let mut raw = raw_output(thread_id(12), String::new());
+    raw.content_items = (0..128)
+        .map(|index| FunctionCallOutputContentItem::InputText {
+            text: format!("result-{index}"),
+        })
+        .collect();
+    let rendered = reducer_input(&reduction_context(), &raw, MAX_REDUCER_INPUT_BYTES)
+        .expect("many items must produce a deterministic bounded view");
+    assert!(rendered.len() <= MAX_REDUCER_INPUT_BYTES);
+    assert!(rendered.contains("result-0"));
+    assert!(rendered.contains("result-127"));
+}
+
+#[test]
+fn search_locates_late_matches_with_a_readable_absolute_offset() {
+    let owner = thread_id(13);
+    let prefix = format!("first line\n{}", "界".repeat(1000));
+    let raw = raw_output(owner, format!("{prefix}needle tail"));
+    let service =
+        TokenMiserService::new([RolloutItem::TokenMiserOutput(Arc::new(raw))], Some(owner));
+    let found = service
+        .search(owner, OBJECT_ID, "needle", 1)
+        .expect("search");
+    let hit = &found["matches"][0];
+    assert!(hit["snippet"].as_str().expect("snippet").contains("needle"));
+    assert_eq!(hit["offset"], json!(prefix.len()));
+    let read = service
+        .read(
+            owner,
+            OBJECT_ID,
+            0,
+            hit["offset"].as_u64().expect("offset") as usize,
+            11,
+        )
+        .expect("read search match");
+    assert_eq!(read["content"], json!("needle tail"));
+}
+
+#[test]
 fn retrieval_is_exact_bounded_and_thread_scoped() {
     let owner = thread_id(2);
     let text = format!("first needle\n{}\nlast needle", "界".repeat(20_000));
@@ -102,6 +142,64 @@ fn retrieval_is_exact_bounded_and_thread_scoped() {
     .search(owner, OBJECT_ID, "needle", usize::MAX)
     .expect("escape-dense search remains bounded");
     assert!(adversarial.to_string().len() <= MAX_READ_BYTES);
+}
+
+#[test]
+fn restored_live_output_is_retrievable_without_becoming_a_terminal_decision() {
+    let owner = thread_id(10);
+    let mut raw = raw_output(owner, "exact live output".to_string());
+    raw.script_status = "Script running with cell ID cell-id".to_string();
+    let service =
+        TokenMiserService::new([RolloutItem::TokenMiserOutput(Arc::new(raw))], Some(owner));
+    let read = service
+        .read(owner, OBJECT_ID, 0, 0, 1024)
+        .expect("restored live read");
+    assert_eq!(read["content"], json!("exact live output"));
+    assert!(
+        service
+            .terminal_cells
+            .lock()
+            .expect("terminal map")
+            .is_empty()
+    );
+}
+
+#[test]
+fn retrieval_json_is_bounded_and_utf8_continuations_make_progress() {
+    let owner = thread_id(11);
+    let service = TokenMiserService::new(
+        [RolloutItem::TokenMiserOutput(Arc::new(raw_output(
+            owner,
+            format!("界{}", "\0".repeat(10_000)),
+        )))],
+        Some(owner),
+    );
+    assert_eq!(
+        service.read(owner, OBJECT_ID, 0, 0, 1),
+        Err("max_bytes must accommodate the next UTF-8 character (up to 4 bytes)".to_string())
+    );
+    let first = service
+        .read(owner, OBJECT_ID, 0, 0, 3)
+        .expect("whole codepoint");
+    assert_eq!(first["next_offset"], json!(3));
+    let dense = service
+        .read(owner, OBJECT_ID, 0, 3, usize::MAX)
+        .expect("escaped read");
+    let rendered = crate::context::TokenMiserRetrievalResult::new(dense.to_string()).render();
+    assert!(rendered.len() <= MAX_READ_BYTES);
+    assert!(dense["next_offset"].as_u64().expect("continuation") > 3);
+    service
+        .record_retrieval("cell-id", &dense)
+        .expect("first authorized read");
+    assert!(service.record_retrieval("cell-id", &dense).is_err());
+    let delivered = service
+        .take_retrieval("cell-id")
+        .expect("authorized delivery");
+    assert_eq!(
+        delivered,
+        vec![FunctionCallOutputContentItem::InputText { text: rendered }]
+    );
+    assert!(service.take_retrieval("cell-id").is_none());
 }
 
 #[test]

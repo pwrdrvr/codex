@@ -29,6 +29,8 @@ export type Usage = {
   output_tokens: number;
   /** The number of reasoning output tokens used during the turn. */
   reasoning_output_tokens: number;
+  /** Provider-reported total, including in-process reducer usage. Absent with older binaries. */
+  total_tokens?: number;
 };
 
 /** Emitted when a turn is completed. Typically right after the assistant's response. */

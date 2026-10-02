@@ -3951,6 +3951,17 @@ impl Config {
                 .unwrap_or_default(),
         };
         let code_mode = resolve_code_mode_config(&cfg);
+        if code_mode.token_miser.is_some() && ephemeral.unwrap_or_default() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Token Miser requires durable session storage; remove --ephemeral or disable features.code_mode.token_miser.enabled",
+            ));
+        }
+        if code_mode.token_miser.is_some() {
+            startup_warnings.push(
+                "Experimental Token Miser uses Code Mode-only output delivery; direct-only controls and hosted search are unavailable in this mode.".to_string(),
+            );
+        }
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;

@@ -202,7 +202,9 @@ impl Session {
             .rev()
             .find_map(|item| match item {
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.turn_id.clone()),
-                RolloutItem::SessionMeta(_)
+                RolloutItem::TokenMiserOutput(_)
+                | RolloutItem::TokenMiserDecision(_)
+                | RolloutItem::SessionMeta(_)
                 | RolloutItem::ResponseItem(_)
                 | RolloutItem::InterAgentCommunication(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. }

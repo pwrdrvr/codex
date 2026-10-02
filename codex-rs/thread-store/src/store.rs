@@ -192,6 +192,29 @@ pub trait ThreadStore: Any + Send + Sync {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredThreadHistory>;
 
+    /// Loads opaque Token Miser records for owner-thread retrieval, never conversational history.
+    /// Paginated stores must implement this independently of their full-history admission policy.
+    fn load_token_miser_items(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreFuture<'_, Vec<codex_rollout::RolloutItem>> {
+        Box::pin(async move {
+            Ok(self
+                .load_history(params)
+                .await?
+                .items
+                .into_iter()
+                .filter(|item| {
+                    matches!(
+                        item,
+                        codex_rollout::RolloutItem::TokenMiserOutput(_)
+                            | codex_rollout::RolloutItem::TokenMiserDecision(_)
+                    )
+                })
+                .collect())
+        })
+    }
+
     /// Loads the persisted rollout items needed to reconstruct the latest model-visible context.
     ///
     /// Implementations that cannot perform a targeted read may return the full persisted history.
