@@ -10,9 +10,13 @@ use super::from_response_item;
 
 fn assistant_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::with_suffix("msg", "intent")),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: text.to_string(),
         }],
         phase: None,
@@ -63,9 +67,13 @@ fn ignores_reasoning_summary_and_raw_chain_of_thought() {
 #[test]
 fn ignores_messages_without_visible_assistant_narration() {
     let user_message = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::with_suffix("msg", "user")),
         role: "user".to_string(),
         content: vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: "not assistant narration".to_string(),
         }],
         phase: None,
