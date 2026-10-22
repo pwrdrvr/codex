@@ -486,6 +486,8 @@ async fn rejected_tool_call_discards_recorded_parent_intent() {
         ToolCallRuntime::new(Arc::clone(&session), Arc::clone(&step_context), tracker);
     let call_id = "rejected-parent-intent";
     let item = ResponseItem::FunctionCall {
+        status: None,
+        encrypted_content: None,
         id: None,
         name: "unsupported_tool".to_string(),
         namespace: None,

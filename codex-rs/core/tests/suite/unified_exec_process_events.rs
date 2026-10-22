@@ -70,6 +70,8 @@ const RECOVERED_OUTPUT: &str = "recovered missing output\n";
 const RETAINED_OUTPUT: &str = "retained output\n";
 const REPLAY_OUTPUT_EVENT_COUNT: u64 = 1024;
 const REPLAY_RETAINED_OUTPUT_SEQ: u64 = 800;
+// Empty polls have a downstream 30-second minimum; allow transport and turn overhead.
+const EMPTY_POLL_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(windows, allow(dead_code))]
@@ -628,7 +630,9 @@ async fn serve_exec_with_pushed_events(
 
     let mut pending_drain_response = None;
     loop {
-        let wait = if output_stays_open {
+        let wait = if matches!(scenario, PushedExecScenario::OutputOpenAtDeadline) {
+            EMPTY_POLL_TIMEOUT
+        } else if output_stays_open {
             STARTUP_TIMEOUT
         } else {
             Duration::from_secs(/*secs*/ 5)
@@ -1258,11 +1262,9 @@ timeout = 900
     let mut drain_poll_started = false;
     let wait_for_end =
         finish_at_deadline || finish_at_final_poll || cancel_after_exit || terminate_after_exit;
-    let event_timeout = if finish_at_deadline
-        || finish_at_final_poll
-        || terminate_after_exit
-        || resumable_cancel
-        || output_after_yield
+    let event_timeout = if finish_at_deadline {
+        EMPTY_POLL_TIMEOUT
+    } else if finish_at_final_poll || terminate_after_exit || resumable_cancel || output_after_yield
     {
         STARTUP_TIMEOUT
     } else {
