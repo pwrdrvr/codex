@@ -49,14 +49,16 @@ jobs:
           # satisfy the manifests, which is the check a hand-edited lockfile
           # needs and that a plain build would silently paper over.
           - name: test
-            command: cargo nextest run --locked -p codex-core --lib --no-fail-fast
+            # The gRPC-over-stdio unit tests launch this helper, which Cargo's
+            # library test target does not build automatically.
+            command: >-
+              cargo build --locked --bin codex-code-mode-host &&
+              cargo nextest run --locked -p codex-core --lib --no-fail-fast
           - name: clippy
             command: cargo clippy --locked -p codex-core --all-targets
-          # The two jobs above only ever compile codex-core as a library. None
-          # of the shipped executables live there — `codex` is in codex-rs/cli —
-          # so without this a change that breaks a caller would pass the gate
-          # and only surface at release time. Debug profile: this is a link
-          # check, not an artifact.
+          # The jobs above do not build the CLI or app-server executables, so
+          # a change that breaks those callers could pass the library checks.
+          # Debug profile: this is a link check, not an artifact.
           # `--lib` above deliberately skips core/tests/suite, which wants
           # sandbox helpers and exec servers. This one integration test is the
           # exception: it is the only coverage of the config -> CodeModeService
