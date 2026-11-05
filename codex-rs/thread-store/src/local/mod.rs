@@ -1,6 +1,7 @@
 mod archive_thread;
 mod create_thread;
 mod delete_thread;
+mod export_thread;
 mod helpers;
 mod history_revision;
 mod list_threads;

@@ -574,6 +574,12 @@ client_request_definitions! {
         serialization: thread_or_path(params.thread_id, params.path),
         response: v2::ThreadForkResponse,
     },
+    /// Export complete portable history, flattening paginated fork ancestry.
+    ThreadExport => "thread/export" {
+        params: v2::ThreadExportParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadExportResponse,
+    },
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         serialization: thread_id(params.thread_id),

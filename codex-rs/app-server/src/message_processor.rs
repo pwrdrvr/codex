@@ -1535,6 +1535,9 @@ impl MessageProcessor {
             ClientRequest::ThreadRead { params, .. } => {
                 self.thread_processor.thread_read(&request_id, params).await
             }
+            ClientRequest::ThreadExport { params, .. } => {
+                self.thread_processor.thread_export(params).await
+            }
             ClientRequest::ThreadReadStateUpdate { params, .. } => {
                 self.thread_processor.thread_read_state_update(params).await
             }

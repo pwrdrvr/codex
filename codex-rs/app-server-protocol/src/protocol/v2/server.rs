@@ -12,8 +12,17 @@ pub struct ServerCapabilitiesReadParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ServerCapabilitiesReadResponse {
+    pub thread_export: ThreadExportCapability,
     pub code_mode_output_reducer: CodeModeOutputReducerCapability,
     pub pwrdrvr_token_miser: PwrdrvrTokenMiserCapability,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadExportCapability {
+    pub version: u32,
+    pub format: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
