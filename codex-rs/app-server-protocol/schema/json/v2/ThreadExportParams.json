@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Export a complete portable snapshot, without requiring clients to inspect storage.",
+  "properties": {
+    "maxBytes": {
+      "description": "Maximum decoded snapshot size; defaults to 64 MiB and cannot exceed 128 MiB.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadExportParams",
+  "type": "object"
+}

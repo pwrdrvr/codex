@@ -5371,6 +5371,40 @@ class ThreadEnvironment(BaseModel):
     ]
 
 
+class ThreadExportCapability(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    format: str
+    version: Annotated[int, Field(ge=0)]
+
+
+class ThreadExportParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    max_bytes: Annotated[
+        int | None,
+        Field(
+            alias="maxBytes",
+            description="Maximum decoded snapshot size; defaults to 64 MiB and cannot exceed 128 MiB.",
+            ge=0,
+        ),
+    ] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadExportResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    data_base64: Annotated[str, Field(alias="dataBase64")]
+    format: Annotated[
+        str, Field(description="Versioned, self-contained JSONL accepted by thread/fork.path.")
+    ]
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
 class ThreadExtra(BaseModel):
     pass
     model_config = ConfigDict(
@@ -7040,6 +7074,15 @@ class ThreadResumeRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["thread/resume"], Field(title="Thread/resumeRequestMethod")]
     params: ThreadResumeParams
+
+
+class ThreadExportRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/export"], Field(title="Thread/exportRequestMethod")]
+    params: ThreadExportParams
 
 
 class ThreadArchiveRequest(BaseModel):
@@ -9414,6 +9457,7 @@ class ServerCapabilitiesReadResponse(BaseModel):
         CodeModeOutputReducerCapability, Field(alias="codeModeOutputReducer")
     ]
     pwrdrvr_token_miser: Annotated[PwrdrvrTokenMiserCapability, Field(alias="pwrdrvrTokenMiser")]
+    thread_export: Annotated[ThreadExportCapability, Field(alias="threadExport")]
 
 
 class ThreadStatusChangedServerNotification(BaseModel):
@@ -12976,6 +13020,7 @@ class ClientRequest(
         | ThreadStartRequest
         | ThreadResumeRequest
         | ThreadForkRequest
+        | ThreadExportRequest
         | ThreadArchiveRequest
         | ThreadDeleteRequest
         | ThreadUnsubscribeRequest
@@ -13088,6 +13133,7 @@ class ClientRequest(
         | ThreadStartRequest
         | ThreadResumeRequest
         | ThreadForkRequest
+        | ThreadExportRequest
         | ThreadArchiveRequest
         | ThreadDeleteRequest
         | ThreadUnsubscribeRequest

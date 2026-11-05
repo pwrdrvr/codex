@@ -303,6 +303,23 @@
         "version"
       ],
       "type": "object"
+    },
+    "ThreadExportCapability": {
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "version"
+      ],
+      "type": "object"
     }
   },
   "properties": {
@@ -311,11 +328,15 @@
     },
     "pwrdrvrTokenMiser": {
       "$ref": "#/definitions/PwrdrvrTokenMiserCapability"
+    },
+    "threadExport": {
+      "$ref": "#/definitions/ThreadExportCapability"
     }
   },
   "required": [
     "codeModeOutputReducer",
-    "pwrdrvrTokenMiser"
+    "pwrdrvrTokenMiser",
+    "threadExport"
   ],
   "title": "ServerCapabilitiesReadResponse",
   "type": "object"

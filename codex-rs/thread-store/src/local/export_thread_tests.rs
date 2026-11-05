@@ -156,3 +156,49 @@ async fn portable_export_refuses_a_truncated_or_oversized_snapshot_instead_of_om
         .unwrap();
     assert!(store.export_thread_rollout(id, 1024 * 1024).await.is_err());
 }
+
+#[tokio::test]
+async fn portable_export_legacy_projection_preserves_paginated_user_messages() {
+    use codex_app_server_protocol::ThreadHistoryBuilder;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ItemCompletedEvent;
+    use codex_protocol::user_input::UserInput;
+    use std::io::Write;
+
+    let home = TempDir::new().unwrap();
+    let store = LocalThreadStore::new(test_config(home.path()), None);
+    let id = ThreadId::default();
+    let (file, _) = write_history(home.path(), id, None, &[]);
+    let event = RolloutLine {
+        timestamp: "2026-11-05T12:00:00Z".to_string(),
+        ordinal: Some(1),
+        item: RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: id,
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::UserMessage(UserMessageItem::new(&[UserInput::Text {
+                text: "portable question".to_string(),
+                text_elements: vec![],
+            }])),
+            started_at_ms: None,
+            completed_at_ms: 0,
+        })),
+    };
+    let mut writer = fs::OpenOptions::new().append(true).open(file).unwrap();
+    serde_json::to_writer(&mut writer, &event).unwrap();
+    writer.write_all(b"\n").unwrap();
+    drop(writer);
+    let bytes = store.export_thread_rollout(id, 1024 * 1024).await.unwrap();
+    let mut builder = ThreadHistoryBuilder::new();
+    for line in std::str::from_utf8(&bytes).unwrap().lines() {
+        let line = codex_rollout::parse_rollout_line(line).unwrap();
+        if let Some(item) = codex_rollout::persisted_rollout_item(&line.item, ThreadHistoryMode::Legacy) {
+            builder.handle_rollout_item(item.as_ref());
+        }
+    }
+    let turns = builder.finish();
+    assert_eq!(turns.len(), 1, "legacy fork must retain the visible user turn");
+    assert_eq!(turns[0].items.len(), 1);
+    assert!(serde_json::to_string(&turns[0].items[0]).unwrap().contains("portable question"));
+}
