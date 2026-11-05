@@ -193,12 +193,22 @@ async fn portable_export_legacy_projection_preserves_paginated_user_messages() {
     let mut builder = ThreadHistoryBuilder::new();
     for line in std::str::from_utf8(&bytes).unwrap().lines() {
         let line = codex_rollout::parse_rollout_line(line).unwrap();
-        if let Some(item) = codex_rollout::persisted_rollout_item(&line.item, ThreadHistoryMode::Legacy) {
+        if let Some(item) =
+            codex_rollout::persisted_rollout_item(&line.item, ThreadHistoryMode::Legacy)
+        {
             builder.handle_rollout_item(item.as_ref());
         }
     }
     let turns = builder.finish();
-    assert_eq!(turns.len(), 1, "legacy fork must retain the visible user turn");
+    assert_eq!(
+        turns.len(),
+        1,
+        "legacy fork must retain the visible user turn"
+    );
     assert_eq!(turns[0].items.len(), 1);
-    assert!(serde_json::to_string(&turns[0].items[0]).unwrap().contains("portable question"));
+    assert!(
+        serde_json::to_string(&turns[0].items[0])
+            .unwrap()
+            .contains("portable question")
+    );
 }

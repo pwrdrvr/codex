@@ -1,6 +1,8 @@
 //! Produces self-contained rollout history without exposing storage layout to clients.
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::ReverseJsonlScanner;
 use codex_rollout::RolloutItem;
@@ -53,7 +55,8 @@ impl LocalThreadStore {
                 operation: "thread/export with inherited subagent-only projection",
             });
         }
-        let segments = if meta.meta.history_mode == ThreadHistoryMode::Paginated {
+        let paginated = meta.meta.history_mode == ThreadHistoryMode::Paginated;
+        let segments = if paginated {
             self.resolve_rollout_lineage(thread_id, Some(path))
                 .await?
                 .segments
@@ -99,6 +102,30 @@ impl LocalThreadStore {
                     }
                     line.ordinal = None;
                     let mut bytes = Vec::new();
+                    // Paginated history stores canonical item lifecycle events. Legacy
+                    // projection needs their durable compatibility events as well as the
+                    // model response records; merely changing history_mode loses the UI.
+                    if paginated
+                        && let RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) = &line.item
+                    {
+                        for event in event.as_legacy_events(true) {
+                            let item = RolloutItem::EventMsg(event);
+                            if let Some(item) = codex_rollout::persisted_rollout_item(
+                                &item,
+                                ThreadHistoryMode::Legacy,
+                            ) {
+                                append_line(
+                                    &mut bytes,
+                                    &RolloutLine {
+                                        timestamp: line.timestamp.clone(),
+                                        ordinal: None,
+                                        item: item.into_owned(),
+                                    },
+                                    max_bytes,
+                                )?;
+                            }
+                        }
+                    }
                     append_line(&mut bytes, &line, max_bytes)?;
                     segment_bytes = segment_bytes.saturating_add(bytes.len());
                     if output.len().saturating_add(segment_bytes) > max_bytes {
