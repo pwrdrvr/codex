@@ -77,6 +77,10 @@ async fn server_capabilities_advertises_code_mode_output_reducer_contract() -> R
     assert_eq!(
         capabilities,
         ServerCapabilitiesReadResponse {
+            thread_export: codex_app_server_protocol::ThreadExportCapability {
+                version: 1,
+                format: "legacy-rollout-v1".to_string(),
+            },
             code_mode_output_reducer: CodeModeOutputReducerCapability {
                 protocol_version: 1,
                 continuation_guidance_version: 1,

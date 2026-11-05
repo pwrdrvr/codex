@@ -11,6 +11,7 @@ use codex_app_server_protocol::ServerCapabilitiesReadResponse;
 use codex_app_server_protocol::ServerDiagnosticsGauge;
 use codex_app_server_protocol::ServerDiagnosticsProcess;
 use codex_app_server_protocol::ServerDiagnosticsResponse;
+use codex_app_server_protocol::ThreadExportCapability;
 
 pub(crate) fn read_server_diagnostics() -> ServerDiagnosticsResponse {
     let diagnostics = codex_diagnostics::snapshot();
@@ -34,6 +35,10 @@ pub(crate) fn read_server_diagnostics() -> ServerDiagnosticsResponse {
 
 pub(crate) fn read_server_capabilities() -> ServerCapabilitiesReadResponse {
     ServerCapabilitiesReadResponse {
+        thread_export: ThreadExportCapability {
+            version: 1,
+            format: "legacy-rollout-v1".to_string(),
+        },
         code_mode_output_reducer: CodeModeOutputReducerCapability {
             protocol_version: 1,
             continuation_guidance_version: 1,

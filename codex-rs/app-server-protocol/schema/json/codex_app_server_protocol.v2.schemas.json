@@ -1899,6 +1899,31 @@
           "type": "object"
         },
         {
+          "description": "Export complete portable history, flattening paginated fork ancestry.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/export"
+              ],
+              "title": "Thread/exportRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadExportParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/exportRequest",
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -16600,11 +16625,15 @@
         },
         "pwrdrvrTokenMiser": {
           "$ref": "#/definitions/PwrdrvrTokenMiserCapability"
+        },
+        "threadExport": {
+          "$ref": "#/definitions/ThreadExportCapability"
         }
       },
       "required": [
         "codeModeOutputReducer",
-        "pwrdrvrTokenMiser"
+        "pwrdrvrTokenMiser",
+        "threadExport"
       ],
       "title": "ServerCapabilitiesReadResponse",
       "type": "object"
@@ -19744,6 +19773,68 @@
         "environmentId",
         "runtimeWorkspaceRoots"
       ],
+      "type": "object"
+    },
+    "ThreadExportCapability": {
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ThreadExportParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Export a complete portable snapshot, without requiring clients to inspect storage.",
+      "properties": {
+        "maxBytes": {
+          "description": "Maximum decoded snapshot size; defaults to 64 MiB and cannot exceed 128 MiB.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadExportParams",
+      "type": "object"
+    },
+    "ThreadExportResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "dataBase64": {
+          "type": "string"
+        },
+        "format": {
+          "description": "Versioned, self-contained JSONL accepted by thread/fork.path.",
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataBase64",
+        "format",
+        "threadId"
+      ],
+      "title": "ThreadExportResponse",
       "type": "object"
     },
     "ThreadExtra": {

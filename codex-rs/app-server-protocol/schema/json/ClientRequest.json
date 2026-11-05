@@ -4517,6 +4517,27 @@
       ],
       "type": "object"
     },
+    "ThreadExportParams": {
+      "description": "Export a complete portable snapshot, without requiring clients to inspect storage.",
+      "properties": {
+        "maxBytes": {
+          "description": "Maximum decoded snapshot size; defaults to 64 MiB and cannot exceed 128 MiB.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadForkParams": {
       "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using a non-empty path, the thread_id param will be ignored. Empty string path values are treated as absent.\n\nPrefer using thread_id whenever possible.",
       "properties": {
@@ -6440,6 +6461,31 @@
         "params"
       ],
       "title": "Thread/forkRequest",
+      "type": "object"
+    },
+    {
+      "description": "Export complete portable history, flattening paginated fork ancestry.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/export"
+          ],
+          "title": "Thread/exportRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadExportParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/exportRequest",
       "type": "object"
     },
     {

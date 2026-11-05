@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "dataBase64": {
+      "type": "string"
+    },
+    "format": {
+      "description": "Versioned, self-contained JSONL accepted by thread/fork.path.",
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "dataBase64",
+    "format",
+    "threadId"
+  ],
+  "title": "ThreadExportResponse",
+  "type": "object"
+}
