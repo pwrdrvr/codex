@@ -212,3 +212,43 @@ async fn portable_export_legacy_projection_preserves_paginated_user_messages() {
             .contains("portable question")
     );
 }
+
+#[tokio::test]
+async fn portable_export_preserves_compaction_reasoning_and_tool_records_in_order() {
+    use std::io::Write;
+
+    let home = TempDir::new().unwrap();
+    let store = LocalThreadStore::new(test_config(home.path()), None);
+    let id = ThreadId::default();
+    let (file, _) = write_history(home.path(), id, None, &[]);
+    let records = [
+        json!({ "type": "response_item", "payload": { "type": "reasoning", "summary": [{ "type": "summary_text", "text": "retained reasoning" }], "encrypted_content": "opaque" } }),
+        json!({ "type": "response_item", "payload": { "type": "function_call", "name": "exec_command", "call_id": "call-1", "arguments": "{}" } }),
+        json!({ "type": "response_item", "payload": { "type": "function_call_output", "call_id": "call-1", "output": "retained tool output" } }),
+        json!({ "type": "compacted", "payload": { "message": "retained summary", "window_number": 1, "replacement_history": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "compacted context" }] }] } }),
+    ];
+    let mut writer = fs::OpenOptions::new().append(true).open(&file).unwrap();
+    let mut expected = Vec::new();
+    for (index, record) in records.into_iter().enumerate() {
+        let mut fields = record.as_object().unwrap().clone();
+        fields.insert("timestamp".to_string(), json!("2026-11-05T12:00:00Z"));
+        fields.insert("ordinal".to_string(), json!(index + 1));
+        let line = codex_rollout::decode_rollout_line(fields.into()).unwrap();
+        expected.push(serde_json::to_value(&line.item).unwrap());
+        serde_json::to_writer(&mut writer, &line).unwrap();
+        writer.write_all(b"\n").unwrap();
+    }
+    drop(writer);
+    let bytes = store.export_thread_rollout(id, 1024 * 1024).await.unwrap();
+    assert_eq!(contents(&bytes)[1..], expected);
+    let exported = home.path().join("portable-test-fixture.jsonl");
+    fs::write(&exported, bytes).unwrap();
+    let loaded = super::super::read_thread::load_history_items(&exported)
+        .await
+        .unwrap();
+    assert_eq!(
+        loaded.len(),
+        expected.len() + 1,
+        "legacy import must decode every model record"
+    );
+}

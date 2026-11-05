@@ -28,6 +28,16 @@ helpers, Windows only.
 
 ## Managed update contract
 
+The managed App Server adds `thread/export` for cross-machine handoff. It
+returns a bounded, self-contained `legacy-rollout-v1` snapshot, flattening
+paginated fork ancestry and preserving legacy presentation and model history.
+`server/capabilities/read.threadExport` advertises version 1. The sender needs
+this capability for paginated threads; a stock receiver can import the result
+through `thread/fork.path`. Clients must treat the exported bytes as opaque.
+
+The exporter currently refuses inherited subagent-only history rather than
+exposing parent-only presentation in a legacy transcript.
+
 The first release carrying the managed Token Miser activation contract is
 `pwragent-v0.149.0-pwragent.1` (`0.149.0-pwragent.1`). PwrAgent selects exactly
 one of the five archive names in the table above using these stable pairs:

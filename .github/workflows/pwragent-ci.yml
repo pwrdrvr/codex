@@ -56,6 +56,10 @@ jobs:
               cargo nextest run --locked -p codex-core --lib --no-fail-fast
           - name: clippy
             command: cargo clippy --locked -p codex-core --all-targets
+          - name: portable-history
+            command: >-
+              cargo nextest run --locked
+              -p codex-thread-store -p codex-app-server-protocol --lib --no-fail-fast
           # The jobs above do not build the CLI or app-server executables, so
           # a change that breaks those callers could pass the library checks.
           # Debug profile: this is a link check, not an artifact.
