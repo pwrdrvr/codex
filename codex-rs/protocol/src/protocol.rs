@@ -2114,6 +2114,8 @@ pub enum CodexErrorInfo {
     PolicyCapacityUnavailable,
     /// The workspace's inference hook explicitly denied this request.
     InferenceHookDenied,
+    /// The provider blocked the response with a content filter.
+    ContentFilter,
     CyberPolicy,
     BioPolicy,
     MisalignmentPolicyViolation,
@@ -2162,6 +2164,7 @@ impl CodexErrorInfo {
             | Self::ModelNotFound
             | Self::PolicyCapacityUnavailable
             | Self::InferenceHookDenied
+            | Self::ContentFilter
             | Self::CyberPolicy
             | Self::BioPolicy
             | Self::MisalignmentPolicyViolation

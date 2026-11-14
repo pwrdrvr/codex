@@ -27,6 +27,7 @@ enum CodexErrorInfoWire {
     /// Capacity is unavailable on a route restricted by server policy.
     PolicyCapacityUnavailable,
     InferenceHookDenied,
+    ContentFilter,
     CyberPolicy,
     BioPolicy,
     MisalignmentPolicyViolation,

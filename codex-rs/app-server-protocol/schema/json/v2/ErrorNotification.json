@@ -33,6 +33,13 @@
           "type": "string"
         },
         {
+          "description": "The provider blocked the response with a content filter.",
+          "enum": [
+            "contentFilter"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "properties": {
             "httpConnectionFailed": {

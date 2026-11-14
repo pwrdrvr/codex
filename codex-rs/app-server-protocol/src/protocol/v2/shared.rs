@@ -85,6 +85,8 @@ pub enum CodexErrorInfo {
     PolicyCapacityUnavailable,
     /// The workspace's inference hook explicitly denied this request.
     InferenceHookDenied,
+    /// The provider blocked the response with a content filter.
+    ContentFilter,
     CyberPolicy,
     MisalignmentPolicyViolation,
     TooManyDenials,
@@ -164,6 +166,7 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
             CoreCodexErrorInfo::PolicyCapacityUnavailable => {
                 CodexErrorInfo::PolicyCapacityUnavailable
             }
+            CoreCodexErrorInfo::ContentFilter => CodexErrorInfo::ContentFilter,
             CoreCodexErrorInfo::CyberPolicy => CodexErrorInfo::CyberPolicy,
             CoreCodexErrorInfo::InferenceHookDenied => CodexErrorInfo::InferenceHookDenied,
             CoreCodexErrorInfo::BioPolicy => CodexErrorInfo::Other,

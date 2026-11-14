@@ -159,20 +159,24 @@ pub(crate) async fn handle_response_stream_error(
         retry_state.retries = retry_count;
         log_retry(request, turn_context, &err, retry_count, max_retries, delay);
 
-        // In release builds, hide the first websocket retry notification to reduce noisy
-        // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
-        let report_error = retry_count > 1
+        let content_filter = matches!(err.details(), CodexErrorDetails::ContentFilter);
+        // Content-filter blocks must remain visible even when the next sample recovers.
+        // In release builds, hide ordinary first websocket reconnects to reduce noise.
+        let report_error = content_filter
+            || retry_count > 1
             || cfg!(debug_assertions)
             || !sess.services.model_client.responses_websocket_enabled();
         if report_error {
             // Surface retry information to any UI/front-end so the user understands what is
             // happening instead of staring at a seemingly frozen screen.
-            sess.notify_stream_error(
-                turn_context,
-                format!("Reconnecting... {retry_count}/{max_retries}"),
-                err,
-            )
-            .await;
+            let message = if content_filter {
+                format!(
+                    "Response blocked by content filter; retrying ({retry_count}/{max_retries})"
+                )
+            } else {
+                format!("Reconnecting... {retry_count}/{max_retries}")
+            };
+            sess.notify_stream_error(turn_context, message, err).await;
         }
         // Use one clock sample so local backoff telemetry retains the selected delay.
         let now = Instant::now();

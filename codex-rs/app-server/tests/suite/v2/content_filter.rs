@@ -100,14 +100,20 @@ async fn run_turn(base_url: &str, websocket: bool) -> Result<(Vec<Value>, Value)
 async fn content_filter_recovery_reports_first_retry(websocket: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let http = responses::start_mock_server().await;
-    let http_mock = responses::mount_sse_sequence(
-        &http,
-        vec![
-            responses::sse(blocked_response()),
-            responses::sse(recovered_response()),
-        ],
-    )
-    .await;
+    let http_mock = if websocket {
+        None
+    } else {
+        Some(
+            responses::mount_sse_sequence(
+                &http,
+                vec![
+                    responses::sse(blocked_response()),
+                    responses::sse(recovered_response()),
+                ],
+            )
+            .await,
+        )
+    };
     let ws = responses::start_websocket_server(vec![
         vec![prewarm_response(), blocked_response()],
         vec![recovered_response()],
@@ -134,7 +140,7 @@ async fn content_filter_recovery_reports_first_retry(websocket: bool) -> Result<
     if websocket {
         assert_eq!(ws.connections().iter().map(Vec::len).sum::<usize>(), 3);
     } else {
-        assert_eq!(http_mock.requests().len(), 2);
+        assert_eq!(http_mock.context("HTTP response mock")?.requests().len(), 2);
     }
     ws.shutdown().await;
     Ok(())
