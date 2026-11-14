@@ -210,6 +210,16 @@ fn usage_limit_reached_error_formats_rate_limit_reached_types() {
 }
 
 #[test]
+fn content_filter_maps_to_protocol() {
+    let info = CodexErr::new(CodexErrorDetails::ContentFilter).to_codex_protocol_error();
+    assert_eq!(
+        serde_json::to_value(&info).unwrap(),
+        serde_json::json!("content_filter")
+    );
+    assert!(info.affects_turn_status());
+}
+
+#[test]
 fn server_overloaded_maps_to_protocol() {
     let err = CodexErr::ServerOverloaded;
     assert_eq!(
