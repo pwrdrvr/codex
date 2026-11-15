@@ -456,6 +456,8 @@ export type { ProjectRoot } from "./ProjectRoot";
 export type { ProjectSortKey } from "./ProjectSortKey";
 export type { ProviderSettings } from "./ProviderSettings";
 export type { ProviderSettingsPatch } from "./ProviderSettingsPatch";
+export type { PwrdrvrTokenMiserActivation } from "./PwrdrvrTokenMiserActivation";
+export type { PwrdrvrTokenMiserCapability } from "./PwrdrvrTokenMiserCapability";
 export type { QueuedSubmission } from "./QueuedSubmission";
 export type { RateLimitReachedType } from "./RateLimitReachedType";
 export type { RateLimitResetCredit } from "./RateLimitResetCredit";

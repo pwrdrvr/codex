@@ -619,7 +619,19 @@ PATH=$TEST_GIT_PATH exec git "$@"
         updated_revision
     );
     let packets = std::fs::read_to_string(packets)?;
+    // Production deliberately disables reference cloning for unrecognized
+    // development versions, even when that Git documents the config key.
+    let installed_version = run_git(source.path(), &["--version"])?;
+    let released_version = installed_version
+        .strip_prefix("git version ")
+        .and_then(|version| version.split_ascii_whitespace().next())
+        .is_some_and(|version| {
+            let release = version.split(".windows.").next().unwrap_or(version);
+            let parts = release.split('.').collect::<Vec<_>>();
+            parts.len() == 3 && parts.iter().all(|part| part.parse::<u32>().is_ok())
+        });
     let can_reuse = reported_version.is_none()
+        && released_version
         && run_git(source.path(), &["help", "--config"])
             .is_ok_and(|keys| keys.lines().any(|key| key == "core.alternateRefsCommand"));
     assert_eq!(

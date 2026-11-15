@@ -1396,10 +1396,14 @@ impl CodexThread {
     }
 
     /// Refresh only the Code Mode output reducer and token ceiling for a loaded thread.
-    pub async fn refresh_code_mode_reduction_config(&self, next_config: &crate::config::Config) {
+    /// Rejects reducer activation if an existing session already truncates output on the host.
+    pub async fn refresh_code_mode_reduction_config(
+        &self,
+        next_config: &crate::config::Config,
+    ) -> Result<(), String> {
         self.session
             .refresh_code_mode_reduction_config(next_config)
-            .await;
+            .await
     }
 
     /// Replace the dynamic tools used when constructing subsequent turn contexts.

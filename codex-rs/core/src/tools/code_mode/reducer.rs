@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use codex_http_client::HttpClient;
 use codex_http_client::HttpClientBuilder;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageReference;
 use futures::future::BoxFuture;
@@ -182,9 +183,7 @@ pub(super) async fn apply_output_reduction(
         .continuation_guidance()
         .and_then(CodeModeOutputReductionGuidance::new)
     {
-        reduced.push(FunctionCallOutputContentItem::InputText {
-            text: guidance.render(),
-        });
+        reduced.push(FunctionCallOutputContentItem::from(guidance.render()));
     }
     reduced.extend(actionable_output_items);
     reduced
@@ -613,11 +612,11 @@ impl CodeModeOutputReducer for HttpCodeModeOutputReducer {
 
 fn model_visible_overhead_characters(continuation_guidance: Option<&str>) -> usize {
     CodeModeOutputReplacementFence::opening()
-        .render()
+        .text()
         .chars()
         .count()
         + CodeModeOutputReplacementFence::closing()
-            .render()
+            .text()
             .chars()
             .count()
         + continuation_guidance.map_or(0, |guidance| {
@@ -699,7 +698,10 @@ fn estimate_payload_bytes(items: &[FunctionCallOutputContentItem]) -> usize {
                 ImageReference::Inline { image_url } => image_url.len(),
                 ImageReference::File { file_id } => file_id.len(),
             },
-            FunctionCallOutputContentItem::InputAudio { audio_url } => audio_url.len(),
+            FunctionCallOutputContentItem::InputAudio { audio } => match audio {
+                AudioReference::Inline { audio_url } => audio_url.len(),
+                AudioReference::File { file_id } => file_id.len(),
+            },
             FunctionCallOutputContentItem::EncryptedContent { encrypted_content } => {
                 encrypted_content.len()
             }

@@ -161,6 +161,7 @@ async fn listener_shutdown_releases_runtime_and_preserves_other_subscribers(
                 },
                 /*app_server_client_name*/ None,
                 /*app_server_client_version*/ None,
+                /*pwrdrvr_token_miser_activation_nonce*/ None,
                 /*client_mcp_extensions*/ Default::default(),
             )
             .await;
@@ -373,6 +374,7 @@ async fn resume_preserves_recovery_turn_before_status_publication() -> Result<()
         },
         Some("codex-tui".into()),
         /*app_server_client_version*/ None,
+        /*pwrdrvr_token_miser_activation_nonce*/ None,
         Default::default(),
     );
     let (resumed, attached) = tokio::time::timeout(TIMEOUT, async {

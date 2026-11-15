@@ -4933,7 +4933,8 @@ impl ThreadRequestProcessor {
                     .map_err(|err| config_load_error(&err))?;
                 existing_thread
                     .refresh_code_mode_reduction_config(&next_config)
-                    .await;
+                    .await
+                    .map_err(invalid_request)?;
             }
             if let Some(dynamic_tools) = params.dynamic_tools.clone() {
                 existing_thread.refresh_dynamic_tools(dynamic_tools).await;

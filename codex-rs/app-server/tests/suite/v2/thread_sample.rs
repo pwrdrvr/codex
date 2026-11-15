@@ -104,6 +104,11 @@ async fn client_with_effort_updates(
     config.with_extra_config(extra_config).write(home.path())?;
     TestAppServer::builder()
         .with_codex_home(home.path())
+        // Discover only this fixture's skills, including when sampling reloads config.
+        .with_env_overrides(&[
+            ("HOME", home.path().to_str()),
+            ("USERPROFILE", home.path().to_str()),
+        ])
         .build_initialized_with_timeout(WAIT)
         .await
 }

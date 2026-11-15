@@ -82,7 +82,7 @@ use crate::turn_metadata::ExecutionMetadata;
 
 pub(crate) struct PostToolUseDispatchOutcome {
     pub(crate) should_block: bool,
-    pub(crate) additional_contexts: Vec<String>,
+    pub(crate) additional_contexts: Vec<codex_hooks::HookContext>,
     pub(crate) feedback_message: Option<String>,
     pub(crate) replacement_response_ids: Vec<String>,
     pub(crate) managed_acceptance:

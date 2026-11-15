@@ -23,7 +23,6 @@ use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeOutputTruncation;
 use codex_code_mode::CodeModeSession;
-use codex_code_mode::CodeModeSessionOptions;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
@@ -91,6 +90,7 @@ pub(crate) struct ExecContext {
 
 pub(crate) struct CodeModeService {
     session: OnceCell<Arc<dyn CodeModeSession>>,
+    session_options_lock: tokio::sync::Mutex<()>,
     session_provider: Arc<dyn CodeModeSessionProvider>,
     availability: Result<(), String>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
@@ -160,6 +160,7 @@ impl CodeModeService {
         let availability = session_provider.availability();
         Self {
             session: OnceCell::new(),
+            session_options_lock: tokio::sync::Mutex::new(()),
             session_provider,
             availability,
             dispatch_broker,
@@ -262,12 +263,29 @@ impl CodeModeService {
             .clone()
     }
 
-    pub(crate) fn refresh_reduction_config(&self, config: &CodeModeConfig) {
+    pub(crate) async fn refresh_reduction_config(
+        &self,
+        config: &CodeModeConfig,
+    ) -> Result<(), String> {
+        // Opening a session pins its output mode. Serialize refresh with startup
+        // prewarming so an accepted reducer never receives host-truncated output.
+        let _guard = self.session_options_lock.lock().await;
+        if config.output_reducer.is_some()
+            && self.session.get().is_some_and(|session| {
+                session.output_truncation() == CodeModeOutputTruncation::Server
+            })
+        {
+            return Err(
+                "cannot enable the Code Mode output reducer after a server-truncated session has started; configure the reducer when starting or reloading the thread, or disable features.code_mode_host_output_truncation before the session starts"
+                    .to_string(),
+            );
+        }
         let next = CodeModeReductionRuntimeConfig::from_config(config);
         *self
             .reduction_config
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+        Ok(())
     }
 
     /// Remembers what a cell is running so a reducer enabled before terminal
@@ -497,10 +515,18 @@ impl CodeModeService {
         )
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "session admission must finish before a reducer refresh can validate its pinned output mode"
+    )]
     pub(crate) async fn session(&self) -> Result<Arc<dyn CodeModeSession>, String> {
         if self.shutdown_token.is_cancelled() {
             return Err("code mode session is shutting down".to_string());
         }
+        if let Some(session) = self.session.get() {
+            return Ok(Arc::clone(session));
+        }
+        let _guard = self.session_options_lock.lock().await;
         self.session
             .get_or_try_init(|| async {
                 if self.shutdown_token.is_cancelled() {
@@ -512,13 +538,19 @@ impl CodeModeService {
                         return Err("code mode session is shutting down".to_string());
                     }
                     session = async {
-                        if self.heartbeat_interval_s == 0 {
+                        let reduction_config = self.reduction_config();
+                        let client_reduction = reduction_config.output_reducer.is_some()
+                            || reduction_config.max_output_tokens_ceiling.is_some();
+                        if self.heartbeat_interval_s == 0 && !client_reduction {
                             self.session_provider.create_session().await
                         } else {
-                            self.session_provider.create_session_with_options(CodeModeSessionOptions {
-                                heartbeat_interval_s: self.heartbeat_interval_s,
-                                ..self.session_provider.default_session_options()
-                            }).await
+                            let mut options = self.session_provider.default_session_options();
+                            options.heartbeat_interval_s = self.heartbeat_interval_s;
+                            if client_reduction {
+                                // Apply the downstream reducer and ceiling before any host truncation.
+                                options.output_truncation = CodeModeOutputTruncation::Client;
+                            }
+                            self.session_provider.create_session_with_options(options).await
                         }
                     } => session?,
                 };
@@ -541,13 +573,12 @@ async fn handle_runtime_response(
     max_output_tokens: Option<usize>,
     output_truncation: CodeModeOutputTruncation,
     wall_time: Duration,
-    experimental_show_cell_overhead: bool,
 ) -> CodeModeToolOutput {
     let script_status = format_script_status(&response);
     let supports_original = can_request_original_image_detail(model_info);
     let host_duration = response
         .code_mode_host_duration()
-        .filter(|_| experimental_show_cell_overhead);
+        .filter(|_| exec.turn.config.code_mode.experimental_show_cell_overhead);
     // A yielded cell can produce more output, so keep its script; anything else
     // is finished with it.
     let is_terminal = !matches!(response, RuntimeResponse::Yielded { .. });
@@ -638,9 +669,23 @@ async fn handle_runtime_response(
                 text: format!("Script error:\n{error_text}"),
             });
         }
-        content_items = reduce_code_mode_result(&reduction_config, &context, content_items, max_output_tokens, boundary).await;
-    } else if reduction_enabled {
-        content_items = reduce_code_mode_result(&reduction_config, &context, content_items, max_output_tokens, boundary).await;
+        content_items = reduce_code_mode_result(
+            &reduction_config,
+            &context,
+            content_items,
+            max_output_tokens,
+            boundary,
+        )
+        .await;
+    } else if reduction_enabled || reduction_config.max_output_tokens_ceiling.is_some() {
+        content_items = reduce_code_mode_result(
+            &reduction_config,
+            &context,
+            content_items,
+            max_output_tokens,
+            boundary,
+        )
+        .await;
     }
     CodeModeToolOutput::new(
         FunctionToolOutput::from_content(content_items, Some(success)),
@@ -977,6 +1022,102 @@ mod tests {
         )
     }
 
+    struct OutputModeSession(codex_code_mode::CodeModeOutputTruncation);
+
+    impl codex_code_mode::CodeModeSession for OutputModeSession {
+        fn output_truncation(&self) -> codex_code_mode::CodeModeOutputTruncation {
+            self.0
+        }
+
+        fn execute<'a>(
+            &'a self,
+            _request: codex_code_mode::ExecuteRequest,
+            _delegate: Arc<dyn codex_code_mode::CodeModeSessionDelegate>,
+            _preempt: Option<tokio_util::sync::CancellationToken>,
+        ) -> codex_code_mode::CodeModeSessionResultFuture<'a, codex_code_mode::StartedCell>
+        {
+            unreachable!("refresh must preserve the session without executing a cell")
+        }
+
+        fn wait<'a>(
+            &'a self,
+            _request: codex_code_mode::WaitRequest,
+            _preempt: Option<tokio_util::sync::CancellationToken>,
+        ) -> codex_code_mode::CodeModeSessionResultFuture<'a, codex_code_mode::WaitOutcome>
+        {
+            unreachable!("refresh must preserve live cells")
+        }
+
+        fn terminate<'a>(
+            &'a self,
+            _request: codex_code_mode::TerminateRequest,
+        ) -> codex_code_mode::CodeModeSessionResultFuture<'a, codex_code_mode::WaitOutcome>
+        {
+            unreachable!("refresh must preserve live cells")
+        }
+
+        fn shutdown<'a>(&'a self) -> codex_code_mode::CodeModeSessionResultFuture<'a, ()> {
+            unreachable!("refresh must preserve stored values")
+        }
+    }
+
+    #[tokio::test]
+    async fn reducer_refresh_preserves_client_sessions_and_rejects_server_sessions() {
+        use codex_code_mode::CodeModeOutputTruncation;
+        for mode in [
+            CodeModeOutputTruncation::Client,
+            CodeModeOutputTruncation::Server,
+        ] {
+            let service = service(&CodeModeConfig::default());
+            let session: Arc<dyn codex_code_mode::CodeModeSession> =
+                Arc::new(OutputModeSession(mode));
+            assert!(service.session.set(Arc::clone(&session)).is_ok());
+            let result = service.refresh_reduction_config(&reducer_config()).await;
+            if mode == CodeModeOutputTruncation::Server {
+                assert!(
+                    result
+                        .expect_err("must not reduce truncated output")
+                        .contains("reloading the thread")
+                );
+                assert!(service.reduction_config().output_reducer.is_none());
+            } else {
+                result.expect("client session supports late reducer activation");
+                assert!(service.reduction_config().output_reducer.is_some());
+            }
+            assert!(Arc::ptr_eq(
+                &session,
+                &service.session().await.expect("existing session")
+            ));
+        }
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the held guard simulates session initialization while refresh waits"
+    )]
+    async fn reducer_refresh_waits_for_session_initialization() {
+        let service = Arc::new(service(&CodeModeConfig::default()));
+        let initialization = service.session_options_lock.lock().await;
+        let refresh = tokio::spawn({
+            let service = Arc::clone(&service);
+            async move { service.refresh_reduction_config(&reducer_config()).await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!refresh.is_finished());
+        assert!(
+            service
+                .session
+                .set(Arc::new(OutputModeSession(
+                    codex_code_mode::CodeModeOutputTruncation::Server
+                )))
+                .is_ok()
+        );
+        drop(initialization);
+        assert!(refresh.await.expect("refresh task").is_err());
+        assert!(service.reduction_config().output_reducer.is_none());
+    }
+
     #[tokio::test]
     async fn acceptance_callbacks_run_concurrently() {
         let service = service(&CodeModeConfig::default());
@@ -1002,8 +1143,8 @@ mod tests {
         assert_eq!(reducer.max_active.load(Ordering::SeqCst), 2);
     }
 
-    #[test]
-    fn actionable_state_survives_reducer_disable_and_reenable() {
+    #[tokio::test]
+    async fn actionable_state_survives_reducer_disable_and_reenable() {
         let enabled = reducer_config();
         let disabled = CodeModeConfig::default();
         let service = service(&enabled);
@@ -1019,8 +1160,14 @@ mod tests {
             }),
         );
 
-        service.refresh_reduction_config(&disabled);
-        service.refresh_reduction_config(&enabled);
+        service
+            .refresh_reduction_config(&disabled)
+            .await
+            .expect("refresh reducer config");
+        service
+            .refresh_reduction_config(&enabled)
+            .await
+            .expect("refresh reducer config");
 
         assert!(
             service
@@ -1031,16 +1178,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cell_reduction_identity_survives_refresh_and_late_enablement() {
+    #[tokio::test]
+    async fn cell_reduction_identity_survives_refresh_and_late_enablement() {
         let enabled = reducer_config();
         let disabled = CodeModeConfig::default();
         let cell_id = CellId::new("enabled-cell".to_string());
         let enabled_service = service(&enabled);
         enabled_service.record_cell_reduction_context(&cell_id, "exec-call", "text('enabled')");
 
-        enabled_service.refresh_reduction_config(&disabled);
-        enabled_service.refresh_reduction_config(&enabled);
+        enabled_service
+            .refresh_reduction_config(&disabled)
+            .await
+            .expect("refresh reducer config");
+        enabled_service
+            .refresh_reduction_config(&enabled)
+            .await
+            .expect("refresh reducer config");
 
         let retained = enabled_service
             .cell_reduction_context(&cell_id, ReductionBoundary::Terminal)
@@ -1051,7 +1204,10 @@ mod tests {
         let late_cell_id = CellId::new("late-enabled-cell".to_string());
         let late_service = service(&disabled);
         late_service.record_cell_reduction_context(&late_cell_id, "late-exec-call", "text('late')");
-        late_service.refresh_reduction_config(&enabled);
+        late_service
+            .refresh_reduction_config(&enabled)
+            .await
+            .expect("refresh reducer config");
 
         let retained = late_service
             .cell_reduction_context(&late_cell_id, ReductionBoundary::Terminal)

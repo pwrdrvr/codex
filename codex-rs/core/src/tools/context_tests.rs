@@ -561,27 +561,24 @@ fn exec_command_post_tool_use_response_ignores_model_output_limit() {
         arguments: "{}".to_string(),
     };
     let marker = format_output_omission_marker(/*omitted_bytes*/ 123_456);
-    let raw_output = format!("START-{}-END", "x".repeat(/*n*/ 20_000)).into_bytes();
+    let raw_output = format!("START-{}-END", "x".repeat(/*n*/ 20_000));
     let response = ExecCommandToolOutput {
         event_call_id: "call-hook".to_string(),
         chunk_id: "chunk-hook".to_string(),
         wall_time: std::time::Duration::from_millis(/*millis*/ 1250),
-        raw_output: raw_output.clone(),
+        raw_output: CapturedStream {
+            text: raw_output.clone(),
+            omitted_bytes: 123_456,
+        },
         truncation_policy: TruncationPolicy::Tokens(10_000),
         max_output_tokens: Some(4),
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(5_000),
-        output_omitted_bytes: NonZeroUsize::new(/*n*/ 123_456),
         hook_command: Some("printf output".to_string()),
+        tool_cwd: None,
     }
     .post_tool_use_response("call-hook", &payload);
 
-    assert_eq!(
-        response,
-        Some(json!(format!(
-            "{marker}\n{}",
-            String::from_utf8(raw_output).expect("test output should be UTF-8")
-        )))
-    );
+    assert_eq!(response, Some(json!(format!("{marker}\n{}", raw_output))));
 }

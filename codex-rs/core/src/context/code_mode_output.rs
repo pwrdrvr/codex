@@ -1,5 +1,7 @@
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::input_text;
 use serde::Serialize;
 
 use super::ContextualUserFragment;
@@ -28,10 +30,15 @@ impl CodeModeOutputReplacementFence {
         Self::Closing
     }
 
-    pub(crate) fn into_output_item(self) -> FunctionCallOutputContentItem {
-        FunctionCallOutputContentItem::InputText {
-            text: self.render(),
+    pub(crate) fn text(self) -> &'static str {
+        match self {
+            Self::Opening => CODE_MODE_OUTPUT_REPLACEMENT_HEADER,
+            Self::Closing => CODE_MODE_OUTPUT_REPLACEMENT_FOOTER,
         }
+    }
+
+    pub(crate) fn into_output_item(self) -> FunctionCallOutputContentItem {
+        FunctionCallOutputContentItem::from(self.render())
     }
 }
 
@@ -52,12 +59,8 @@ impl ContextualUserFragment for CodeModeOutputReplacementFence {
         ("", "")
     }
 
-    fn body(&self) -> String {
-        match self {
-            Self::Opening => CODE_MODE_OUTPUT_REPLACEMENT_HEADER,
-            Self::Closing => CODE_MODE_OUTPUT_REPLACEMENT_FOOTER,
-        }
-        .to_string()
+    fn body(&self) -> ContentItem {
+        input_text(self.text())
     }
 }
 
@@ -156,9 +159,7 @@ impl CodeModeActionableStateFragment {
     }
 
     pub(crate) fn into_output_item(self) -> FunctionCallOutputContentItem {
-        FunctionCallOutputContentItem::InputText {
-            text: self.render(),
-        }
+        FunctionCallOutputContentItem::from(self.render())
     }
 }
 
@@ -179,8 +180,8 @@ impl ContextualUserFragment for CodeModeActionableStateFragment {
         (ACTIONABLE_STATE_START, ACTIONABLE_STATE_END)
     }
 
-    fn body(&self) -> String {
-        self.body.clone()
+    fn body(&self) -> ContentItem {
+        input_text(self.body.clone())
     }
 }
 
@@ -221,7 +222,7 @@ impl ContextualUserFragment for CodeModeOutputReductionGuidance {
         ("", "")
     }
 
-    fn body(&self) -> String {
-        self.body.clone()
+    fn body(&self) -> ContentItem {
+        input_text(self.body.clone())
     }
 }

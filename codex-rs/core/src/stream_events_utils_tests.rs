@@ -479,19 +479,6 @@ async fn rejected_tool_call_discards_recorded_parent_intent() {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
-    let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
-    let router = Arc::new(ToolRouter::from_registry(
-        step_context.turn.as_ref(),
-        step_context.turn.model_info(),
-        registry,
-        hosted_specs,
-        &Default::default(),
-    ));
-    let step_context = step_context.with_tool_router_for_test(router);
-    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let tool_runtime =
-        ToolCallRuntime::new(Arc::clone(&session), Arc::clone(&step_context), tracker);
     let call_id = "rejected-parent-intent";
     let item = ResponseItem::FunctionCall {
         status: None,
@@ -504,18 +491,14 @@ async fn rejected_tool_call_discards_recorded_parent_intent() {
         encrypted_function_args: None,
         internal_chat_message_metadata_passthrough: None,
     };
-    let mut ctx = HandleOutputCtx {
-        sess: Arc::clone(&session),
-        step_context,
-        turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
-        tool_runtime,
-        cancellation_token: CancellationToken::new(),
-        parent_intent: Some(Arc::from("Use the rejected tool for this step.")),
-    };
+    let mut ctx = output_context(Arc::clone(&session), Arc::clone(&turn_context)).await;
+    ctx.parent_intent = Some(Arc::from("Use the rejected tool for this step."));
 
-    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
-        .await
-        .expect("tool call should be queued");
+    let output = handle_output_item_done(
+        &mut ctx, item, /*previously_active_item*/ None, /*moderation*/ None,
+    )
+    .await
+    .expect("tool call should be queued");
     let tool_output = output
         .tool_future
         .expect("tool future")

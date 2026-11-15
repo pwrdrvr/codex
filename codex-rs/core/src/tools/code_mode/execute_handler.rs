@@ -179,7 +179,6 @@ impl CodeModeExecuteHandler {
             args.max_output_tokens,
             exec.session.services.code_mode_service.output_truncation(),
             wall_time,
-            exec.turn.config.code_mode.experimental_show_cell_overhead,
         )
         .await)
     }

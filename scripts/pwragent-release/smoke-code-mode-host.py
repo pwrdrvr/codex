@@ -153,6 +153,13 @@ def run_smoke(host_path: Path) -> None:
         ]
         if type(host_duration_ns) is not int or host_duration_ns < 0:
             raise RuntimeError(f"invalid code-mode host duration: {host_duration_ns!r}")
+        result_buffered_for_ns = execute_response["result"]["value"]["Result"][
+            "result_buffered_for_ns"
+        ]
+        if type(result_buffered_for_ns) is not int or result_buffered_for_ns < 0:
+            raise RuntimeError(
+                f"invalid code-mode result buffer duration: {result_buffered_for_ns!r}"
+            )
         require_equal(
             execute_response,
             {
@@ -164,6 +171,7 @@ def run_smoke(host_path: Path) -> None:
                         "Result": {
                             "cell_id": "1",
                             "code_mode_host_duration_ns": host_duration_ns,
+                            "result_buffered_for_ns": result_buffered_for_ns,
                             "content_items": [
                                 {"type": "input_text", "text": SMOKE_TEXT}
                             ],
