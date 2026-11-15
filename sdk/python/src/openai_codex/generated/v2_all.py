@@ -8672,6 +8672,7 @@ class CodexErrorInfo(
     RootModel[
         CodexErrorInfoValue
         | Literal["inferenceHookDenied"]
+        | Literal["contentFilter"]
         | HttpConnectionFailedCodexErrorInfo
         | ResponseStreamConnectionFailedCodexErrorInfo
         | ResponseStreamDisconnectedCodexErrorInfo
@@ -8683,6 +8684,7 @@ class CodexErrorInfo(
     root: Annotated[
         CodexErrorInfoValue
         | Literal["inferenceHookDenied"]
+        | Literal["contentFilter"]
         | HttpConnectionFailedCodexErrorInfo
         | ResponseStreamConnectionFailedCodexErrorInfo
         | ResponseStreamDisconnectedCodexErrorInfo

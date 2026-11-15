@@ -4955,6 +4955,20 @@ fn codex_error_info_serializes_http_status_code_in_camel_case() {
 }
 
 #[test]
+fn content_filter_error_info_converts_to_camel_case() {
+    let core = codex_protocol::error::CodexErr::new(
+        codex_protocol::error::CodexErrorDetails::ContentFilter,
+    )
+    .to_codex_protocol_error();
+    let info = CodexErrorInfo::from(core);
+    assert_eq!(serde_json::to_value(&info).unwrap(), json!("contentFilter"));
+    assert_eq!(
+        serde_json::from_value::<CodexErrorInfo>(json!("contentFilter")).unwrap(),
+        info
+    );
+}
+
+#[test]
 fn core_error_info_converts_to_camel_case() {
     for (core, expected) in [
         (

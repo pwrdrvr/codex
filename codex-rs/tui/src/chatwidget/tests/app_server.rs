@@ -1958,6 +1958,31 @@ async fn live_app_server_interleaved_flush_repairs_mismatched_completion() {
 
 #[tokio::test]
 async fn live_app_server_stream_recovery_restores_previous_status_header() {
+    assert_stream_recovery_restores_previous_status_header(
+        CodexErrorInfo::ResponseStreamDisconnected {
+            http_status_code: Some(429),
+        },
+        "Reconnecting... 2/5",
+        "Server is busy, reconnecting 2/5",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn live_app_server_stream_recovery_after_content_filter() {
+    assert_stream_recovery_restores_previous_status_header(
+        CodexErrorInfo::ContentFilter,
+        "Response blocked by content filter; retrying (1/5)",
+        "Response blocked by content filter; retrying (1/5)",
+    )
+    .await;
+}
+
+async fn assert_stream_recovery_restores_previous_status_header(
+    error_info: CodexErrorInfo,
+    message: &str,
+    expected_status_header: &str,
+) {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_server_notification(
@@ -1983,10 +2008,8 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
                 misalignment: None,
-                message: "Reconnecting... 2/5".to_string(),
-                codex_error_info: Some(CodexErrorInfo::ResponseStreamDisconnected {
-                    http_status_code: Some(429),
-                }),
+                message: message.to_string(),
+                codex_error_info: Some(error_info),
                 additional_details: None,
             },
             will_retry: true,
@@ -1997,9 +2020,9 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
     );
     drain_insert_history(&mut rx);
 
-    insta::assert_snapshot!(
+    assert_eq!(
         chat.bottom_pane.status_widget().unwrap().header(),
-        @"Server is busy, reconnecting 2/5"
+        expected_status_header,
     );
 
     chat.handle_server_notification(

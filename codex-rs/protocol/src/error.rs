@@ -573,6 +573,7 @@ impl CodexErr {
             CodexErrorDetails::PolicyCapacityUnavailable => {
                 CodexErrorInfo::PolicyCapacityUnavailable
             }
+            CodexErrorDetails::ContentFilter => CodexErrorInfo::ContentFilter,
             CodexErrorDetails::FlexUnavailable => CodexErrorInfo::FlexUnavailable,
             CodexErrorDetails::InferenceHookDenied { .. } => CodexErrorInfo::InferenceHookDenied,
             CodexErrorDetails::CyberPolicy { .. } => CodexErrorInfo::CyberPolicy,
