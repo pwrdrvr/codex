@@ -6,8 +6,10 @@ use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_config::apply_default_gcp_auth;
+use codex_config::build_cli_overrides_layer;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::load_managed_requirements_state;
+use codex_config::merge_toml_values;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -684,15 +686,22 @@ impl ConfigManager {
                 )
             })?);
         }
-        let merged_cli_overrides = cli_overrides
-            .iter()
-            .cloned()
-            .chain(
-                request_overrides
-                    .into_iter()
-                    .map(|(key, value)| (key, json_to_toml(value))),
-            )
+        let request_overrides = request_overrides
+            .into_iter()
+            .map(|(key, value)| (key, json_to_toml(value)))
             .collect::<Vec<_>>();
+        // Process flags and request config are separate layers. Applying a
+        // request table as another CLI assignment would replace sibling flags.
+        let mut merged_cli_overrides = build_cli_overrides_layer(cli_overrides);
+        merge_toml_values(
+            &mut merged_cli_overrides,
+            &build_cli_overrides_layer(&request_overrides),
+        );
+        let TomlValue::Table(merged_cli_overrides) = merged_cli_overrides else {
+            unreachable!("CLI override layers are tables");
+        };
+        // Keep nested keys literal, including MCP server names containing dots.
+        let merged_cli_overrides = merged_cli_overrides.into_iter().collect::<Vec<_>>();
         let result = codex_core::config::ConfigBuilder::default()
             .codex_home(self.codex_home.clone())
             .cli_overrides(merged_cli_overrides)
@@ -810,6 +819,10 @@ impl ConfigManager {
 #[cfg(test)]
 #[path = "application_network_tests.rs"]
 mod application_network_tests;
+
+#[cfg(test)]
+#[path = "config_manager_override_tests.rs"]
+mod override_tests;
 
 #[cfg(test)]
 #[path = "config_manager_provider_tests.rs"]
