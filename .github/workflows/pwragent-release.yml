@@ -447,11 +447,17 @@ jobs:
     env:
       CODEX_VERSION: ${{ needs.metadata.outputs.version }}
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      # Keep nested V8 dependency paths below Windows checkout limits.
+      CARGO_HOME: C:/c
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Enable long dependency checkout paths
+        shell: bash
+        run: git config --global core.longpaths true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
@@ -462,13 +468,13 @@ jobs:
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
+            ${{ env.CARGO_HOME }}/registry/index
+            ${{ env.CARGO_HOME }}/registry/cache
+            ${{ env.CARGO_HOME }}/git/db
             codex-rs/target
-          key: cargo-windows-x86_64-${{ hashFiles('codex-rs/Cargo.lock') }}
+          key: cargo-windows-short-home-v1-x86_64-${{ hashFiles('codex-rs/Cargo.lock') }}
           restore-keys: |
-            cargo-windows-x86_64-
+            cargo-windows-short-home-v1-x86_64-
 
       - name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8
@@ -505,11 +511,11 @@ jobs:
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
+            ${{ env.CARGO_HOME }}/registry/index
+            ${{ env.CARGO_HOME }}/registry/cache
+            ${{ env.CARGO_HOME }}/git/db
             codex-rs/target
-          key: cargo-windows-x86_64-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: cargo-windows-short-home-v1-x86_64-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Stage Windows distribution
         shell: pwsh
