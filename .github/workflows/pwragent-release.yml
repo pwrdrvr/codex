@@ -115,7 +115,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             release_asset: pwragent-codex-${{ needs.metadata.outputs.version }}-linux-x86_64.tar.gz
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 240
+    timeout-minutes: 360
     permissions:
       contents: read
       id-token: none
@@ -168,6 +168,11 @@ jobs:
         run: |
           set -euo pipefail
           export CODEX_BUILD_VERSION="$CODEX_VERSION"
+          # Avoid overlapping memory-heavy CLI and app-server compilation on
+          # hosted macOS and ARM runners; retain the normal release profile.
+          if [[ "$RUNNER_OS" == macOS || "${{ matrix.platform }}" == linux-aarch64 ]]; then
+            export CARGO_BUILD_JOBS=1
+          fi
           cargo build --target "${{ matrix.target }}" --release \
             --bin codex \
             --bin codex-app-server \
