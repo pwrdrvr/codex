@@ -10,11 +10,18 @@ Built by [`.github/workflows/pwragent-release.yml`](../.github/workflows/pwragen
 
 | Platform | Runner | Target | Asset |
 | --- | --- | --- | --- |
-| macOS arm64 | `macos-15` | `aarch64-apple-darwin` | `pwragent-codex-<version>-macos-aarch64.tar.gz` |
-| macOS x64 | `macos-15-intel` | `x86_64-apple-darwin` | `pwragent-codex-<version>-macos-x86_64.tar.gz` |
+| macOS arm64 | `macos-26` (ARM) | `aarch64-apple-darwin` | `pwragent-codex-<version>-macos-aarch64.tar.gz` |
+| macOS x64 | `macos-26` (ARM cross-build) | `x86_64-apple-darwin` | `pwragent-codex-<version>-macos-x86_64.tar.gz` |
 | Linux arm64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `pwragent-codex-<version>-linux-aarch64.tar.gz` |
 | Linux x64 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | `pwragent-codex-<version>-linux-x86_64.tar.gz` |
 | Windows x64 | `windows-2022` | `x86_64-pc-windows-msvc` | `pwragent-codex-<version>-windows-x86_64.zip` |
+
+Both macOS targets compile on standard Apple Silicon runners. The Intel build
+uses `x86_64-apple-darwin` and the checksum-verified x86_64 V8 archive/bindings;
+Rosetta runs the staged Intel executables for version and Code Mode smoke checks.
+Architecture checks require the expected Mach-O architecture before signing.
+Cargo caches are separated by runner image, host architecture, and target to
+keep native build tools from Intel runners out of the ARM build cache.
 
 Each archive contains `LICENSE`, `NOTICE`, a `PWRAGENT-BUILD.txt` provenance
 stamp (version, source repository, source commit, target), and the binaries:

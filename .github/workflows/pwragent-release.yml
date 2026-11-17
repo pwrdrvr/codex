@@ -99,19 +99,23 @@ jobs:
       matrix:
         include:
           - platform: macos-aarch64
-            runner: macos-15
+            runner: macos-26
+            cache_namespace: macos-26-arm64-macos-aarch64
             target: aarch64-apple-darwin
             release_asset: ""
           - platform: macos-x86_64
-            runner: macos-15-intel
+            runner: macos-26
+            cache_namespace: macos-26-arm64-macos-x86_64
             target: x86_64-apple-darwin
             release_asset: ""
           - platform: linux-aarch64
             runner: ubuntu-24.04-arm
+            cache_namespace: linux-aarch64
             target: aarch64-unknown-linux-gnu
             release_asset: pwragent-codex-${{ needs.metadata.outputs.version }}-linux-aarch64.tar.gz
           - platform: linux-x86_64
             runner: ubuntu-24.04
+            cache_namespace: linux-x86_64
             target: x86_64-unknown-linux-gnu
             release_asset: pwragent-codex-${{ needs.metadata.outputs.version }}-linux-x86_64.tar.gz
     runs-on: ${{ matrix.runner }}
@@ -137,6 +141,21 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Configure macOS SDK and Intel execution
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+          if [[ "$TARGET" == x86_64-apple-darwin && "$(uname -m)" == arm64 ]]; then
+            if ! /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+              sudo softwareupdate --install-rosetta --agree-to-license
+            fi
+            /usr/bin/arch -x86_64 /usr/bin/true
+          fi
+
       # Split restore/save on purpose. The combined `actions/cache` skips its
       # post-step save when the job fails, so a build killed at the timeout
       # threw away every object it had compiled. `if: always()` keeps the
@@ -153,9 +172,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             codex-rs/target
-          key: cargo-${{ matrix.platform }}-${{ hashFiles('codex-rs/Cargo.lock') }}
+          key: cargo-${{ matrix.cache_namespace }}-${{ hashFiles('codex-rs/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ matrix.platform }}-
+            cargo-${{ matrix.cache_namespace }}-
 
       - name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8
@@ -187,7 +206,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             codex-rs/target
-          key: cargo-${{ matrix.platform }}-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: cargo-${{ matrix.cache_namespace }}-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Stage distribution
         shell: bash
@@ -216,6 +235,27 @@ jobs:
           test "$("${dest}/codex" --version)" = "codex-cli ${CODEX_VERSION}"
           test "$("${dest}/codex-app-server" --version)" = "codex-app-server ${CODEX_VERSION}"
           test "$("${dest}/codex-code-mode-host" --version)" = "codex-code-mode-host ${CODEX_VERSION}"
+
+      - name: Verify staged macOS architecture and runtime
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          dest="$GITHUB_WORKSPACE/stage/${{ matrix.platform }}"
+          case "$TARGET" in
+            aarch64-apple-darwin) expected_arch=arm64 ;;
+            x86_64-apple-darwin) expected_arch=x86_64 ;;
+            *) echo "Unexpected macOS target: $TARGET" >&2; exit 1 ;;
+          esac
+          for binary in codex codex-app-server codex-code-mode-host; do
+            file "$dest/$binary"
+            test "$(lipo -archs "$dest/$binary")" = "$expected_arch"
+            vtool -show-build "$dest/$binary"
+          done
+          python3 scripts/pwragent-release/smoke-code-mode-host.py "$dest/codex-code-mode-host"
+          python3 scripts/pwragent-release/smoke-deferred-code-mode-reducer.py "$dest/codex-app-server"
 
       - name: Package Linux distribution
         if: runner.os == 'Linux'
@@ -289,7 +329,7 @@ jobs:
         platform:
           - macos-aarch64
           - macos-x86_64
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     environment: apple-signing
     permissions:
