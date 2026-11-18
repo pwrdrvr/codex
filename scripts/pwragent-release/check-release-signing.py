@@ -147,6 +147,34 @@ require(build, "name: signing-input-${{ matrix.platform }}", "build")
 for binary in UNIX_BINARIES:
     require(build, f"--bin {binary}", "build")
 
+# Upstream main keeps codex-rs/Cargo.toml at version 0.0.0, and CARGO_PKG_VERSION
+# is what the backend /models request sends as client_version. Every shipped or
+# validated build must stamp the upstream version before compiling and verify
+# it after, because the --version checks only see CODEX_BUILD_VERSION.
+STAMP_SCRIPT = "../scripts/pwragent-release/stamp-workspace-version.py"
+
+
+def require_workspace_version_stamp(section: str, scope: str, python: str) -> None:
+    stamp_command = f"{python} {STAMP_SCRIPT} stamp"
+    verify_command = f"{python} {STAMP_SCRIPT} verify"
+    require(section, stamp_command, scope)
+    require(section, "--expect-release-version", scope)
+    require(section, verify_command, scope)
+    build_at = section.find("cargo build")
+    if not section.find(stamp_command) < build_at < section.find(verify_command):
+        fail(f"{scope} must stamp the workspace version before cargo build and verify it after")
+
+
+require_workspace_version_stamp(build, "build", "python3")
+require_workspace_version_stamp(windows_prepare, "windows-prepare", "python")
+require_workspace_version_stamp(unsigned_workflow, "unsigned macOS workflow", "python3")
+for fragment in (
+    "scripts/pwragent-release/stamp-workspace-version.py stamp",
+    "scripts/pwragent-release/stamp-workspace-version.py verify",
+    "discover -s scripts/pwragent-release -p 'test_*.py'",
+):
+    require(check_workflow, fragment, "release signing check workflow")
+
 for fragment in (
     "scripts/pwragent-release/prepare-trusted-signing.ps1",
     "-OutputRoot signing-tools",

@@ -205,6 +205,24 @@ binaries. Development artifacts use the reviewed upstream compatibility baseline
 each staged binary with `--version` before packaging, so `PWRAGENT-BUILD.txt`
 and the executable identity cannot silently diverge.
 
+`CODEX_BUILD_VERSION` only reaches `--version` and a few user-agent strings.
+Everything else reads `CARGO_PKG_VERSION`, including the `client_version` the
+models manager sends to the backend `/models` endpoint, which hides models
+whose minimum client version is higher. Upstream `main` keeps
+`codex-rs/Cargo.toml` at the `0.0.0` placeholder and writes the real version
+only on its release tags, so every build job runs
+`scripts/pwragent-release/stamp-workspace-version.py stamp` before `cargo
+build`. That writes the plain upstream version from `upstream-version.txt` into
+`[workspace.package]` and the matching `Cargo.lock` entries, so `--locked`
+builds still work. The workspace version is never committed. The metadata job
+first requires the downstream version to start with that upstream version, so a
+tag that drifted from the baseline fails before any build. After the build,
+`stamp-workspace-version.py verify` fails the job unless every crate that
+inherits the workspace version has that version in both `Cargo.toml` and
+`Cargo.lock`.
+`pwragent-release-check.yml` runs the same stamp-and-verify on every relevant
+change, without a build.
+
 ### Manually (`workflow_dispatch`)
 
 A manual run builds every platform but enters no signing environment. It emits

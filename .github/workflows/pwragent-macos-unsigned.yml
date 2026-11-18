@@ -96,10 +96,15 @@ jobs:
           CODEX_BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          # Upstream main keeps the workspace at 0.0.0. Stamp the real upstream
+          # version so CARGO_PKG_VERSION (and the backend client_version) is right.
+          python3 ../scripts/pwragent-release/stamp-workspace-version.py stamp \
+            --expect-release-version "$CODEX_BUILD_VERSION"
           cargo build --locked --target "$TARGET" --release \
             --bin codex \
             --bin codex-app-server \
             --bin codex-code-mode-host
+          python3 ../scripts/pwragent-release/stamp-workspace-version.py verify
 
       - name: Save Cargo cache
         if: always()
