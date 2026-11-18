@@ -16,6 +16,7 @@ Cargo package version, and the `--version` checks cannot detect this failure.
 Usage, from the repository root:
 
     stamp-workspace-version.py stamp [--expect-release-version VERSION]
+    stamp-workspace-version.py check-release-version VERSION
     stamp-workspace-version.py verify
 
 `stamp` writes the plain upstream SemVer from
@@ -23,8 +24,12 @@ Usage, from the repository root:
 into the `Cargo.lock` entries of the workspace members that inherit it, so
 `--locked` builds keep working. It is idempotent.
 
-`verify` fails unless the workspace members that report the client version to
-the backend have exactly that version in both their resolved manifests and
+`check-release-version` only checks that VERSION starts with the upstream
+version, so a release can fail before any build job starts.
+
+`verify` fails unless every member that inherits the workspace version,
+including the ones that report the client version to the backend, has exactly
+that version in both their resolved manifests and
 `Cargo.lock`.
 """
 
@@ -53,8 +58,10 @@ GUARDED_PACKAGES = (
 )
 
 SEMVER_CORE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+# `version` inside the [workspace.package] table: skip its other lines (which
+# may contain arrays or comments) but never cross into the next table header.
 WORKSPACE_PACKAGE_VERSION = re.compile(
-    r'(?ms)(^\[workspace\.package\][^\[]*?^version\s*=\s*")([^"]*)(")'
+    r'(?m)(^\[workspace\.package\][^\n]*\n(?:(?!\[)[^\n]*\n)*?version\s*=\s*")([^"]*)(")'
 )
 INHERITS_WORKSPACE_VERSION = re.compile(
     r"(?m)^version(\.workspace\s*=\s*true|\s*=\s*\{\s*workspace\s*=\s*true\s*\})"
@@ -115,41 +122,49 @@ def stamp_manifest(manifest: str, version: str) -> str:
     )
 
 
+LOCK_VERSION = re.compile(r'(?m)^version = "([^"]*)"')
+
+
+def lockfile_blocks(lockfile: str) -> tuple[str, list[str]]:
+    """Split a lockfile into its blank-line separated tables, keeping CRLF."""
+    separator = "\r\n\r\n" if "\r\n" in lockfile else "\n\n"
+    return separator, lockfile.split(separator)
+
+
+def local_package_name(block: str) -> str | None:
+    """Name of a local (sourceless) `[[package]]` table, else None."""
+    if not block.startswith("[[package]]") or re.search(r"(?m)^source = ", block):
+        return None
+    name = re.search(r'(?m)^name = "([^"]+)"', block)
+    return name.group(1) if name else None
+
+
 def stamp_lockfile(lockfile: str, members: Iterable[str], version: str) -> str:
     """Rewrite the version of each named local (sourceless) lockfile package."""
     pending = set(members)
-    newline = "\r\n" if "\r\n" in lockfile else "\n"
-    blocks = lockfile.split(f"{newline}{newline}")
+    separator, blocks = lockfile_blocks(lockfile)
     for index, block in enumerate(blocks):
-        if not block.startswith("[[package]]"):
+        name = local_package_name(block)
+        if name not in pending:
             continue
-        name = re.search(r'(?m)^name = "([^"]+)"', block)
-        if name is None or name.group(1) not in pending:
-            continue
-        if re.search(r"(?m)^source = ", block):
-            continue
-        blocks[index] = re.sub(
-            r'(?m)^version = "[^"]*"', f'version = "{version}"', block, count=1
-        )
-        pending.discard(name.group(1))
+        blocks[index] = LOCK_VERSION.sub(f'version = "{version}"', block, count=1)
+        pending.discard(name)
     if pending:
         raise StampError(
             "Cargo.lock has no local entry for workspace members: "
             + ", ".join(sorted(pending))
         )
-    return f"{newline}{newline}".join(blocks)
+    return separator.join(blocks)
 
 
 def local_lockfile_versions(lockfile: str) -> dict[str, str]:
     """Map each local (sourceless) lockfile package name to its version."""
     versions = {}
-    for block in re.split(r"(?:\r?\n){2}", lockfile):
-        if not block.startswith("[[package]]") or re.search(r"(?m)^source = ", block):
-            continue
-        name = re.search(r'(?m)^name = "([^"]+)"', block)
-        version = re.search(r'(?m)^version = "([^"]+)"', block)
+    for block in lockfile_blocks(lockfile)[1]:
+        name = local_package_name(block)
+        version = LOCK_VERSION.search(block)
         if name and version:
-            versions[name.group(1)] = version.group(1)
+            versions[name] = version.group(1)
     return versions
 
 
@@ -186,8 +201,12 @@ def stamp(workspace_dir: Path, version: str) -> None:
         raise StampError("no workspace member inherits [workspace.package] version")
     manifest = read_text(manifest_path)
     previous = workspace_package_version(manifest)
-    write_text(lockfile_path, stamp_lockfile(read_text(lockfile_path), members, version))
-    write_text(manifest_path, stamp_manifest(manifest, version))
+    # Compute both rewrites before writing either, so a failure cannot leave a
+    # stamped lockfile next to an unstamped manifest.
+    stamped_lockfile = stamp_lockfile(read_text(lockfile_path), members, version)
+    stamped_manifest = stamp_manifest(manifest, version)
+    write_text(lockfile_path, stamped_lockfile)
+    write_text(manifest_path, stamped_manifest)
     print(
         f"stamped codex-rs workspace version {previous} -> {version} "
         f"({len(members)} members)"
@@ -209,7 +228,9 @@ def verify(workspace_dir: Path, version: str) -> None:
         if package["id"] in members
     }
     locked = local_lockfile_versions(read_text(workspace_dir / "Cargo.lock"))
-    for name in GUARDED_PACKAGES:
+    # Every inheriting member embeds CARGO_PKG_VERSION somewhere (analytics,
+    # otel, session metadata, ...); the guarded crates must be among them.
+    for name in sorted(set(GUARDED_PACKAGES) | set(version_inheriting_members(metadata))):
         for source, actual in (("Cargo.toml", resolved.get(name)), ("Cargo.lock", locked.get(name))):
             if actual != version:
                 raise StampError(
@@ -227,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
         "--expect-release-version",
         help="downstream version that must be based on upstream-version.txt",
     )
+    check_parser = subcommands.add_parser("check-release-version")
+    check_parser.add_argument("release_version")
     subcommands.add_parser("verify")
     args = parser.parse_args(argv)
 
@@ -236,6 +259,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.expect_release_version:
                 check_release_version(args.expect_release_version, version)
             stamp(WORKSPACE_DIR, version)
+        elif args.command == "check-release-version":
+            check_release_version(args.release_version, version)
+            print(f"release version {args.release_version} is based on {version}")
         else:
             verify(WORKSPACE_DIR, version)
     except StampError as error:

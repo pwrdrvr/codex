@@ -89,6 +89,10 @@ jobs:
             echo "::error::Resolved version is not SemVer: $version" >&2
             exit 1
           fi
+          # Fail before the build matrix starts if the tag drifted from the
+          # upstream baseline the build jobs stamp into Cargo.toml.
+          python3 scripts/pwragent-release/stamp-workspace-version.py \
+            check-release-version "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:

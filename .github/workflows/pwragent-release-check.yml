@@ -58,7 +58,9 @@ jobs:
           set -euo pipefail
           python3 scripts/pwragent-release/stamp-workspace-version.py stamp
           python3 scripts/pwragent-release/stamp-workspace-version.py verify
-          (cd codex-rs && cargo metadata --locked --format-version 1 >/dev/null)
+          # Resolves against the index only; unlike `cargo metadata` it does not
+          # download every dependency's sources.
+          (cd codex-rs && cargo update --workspace --locked)
 
   trusted-signing-preparation:
     name: Prepare TrustedSigning client

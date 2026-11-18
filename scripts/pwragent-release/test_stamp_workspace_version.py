@@ -61,6 +61,21 @@ class StampWorkspaceVersionTest(unittest.TestCase):
         self.assertIn('serde = { version = "1" }', stamped)
         self.assertEqual(STAMP.stamp_manifest(stamped, "0.171.0"), stamped)
 
+    def test_manifest_version_may_follow_arrays_and_comments(self) -> None:
+        manifest = MANIFEST.replace(
+            '[workspace.package]\nversion = "0.0.0"\n',
+            '[workspace.package]\n# see [docs]\nauthors = ["a"]\nversion = "0.0.0"\n',
+        )
+        self.assertEqual(STAMP.workspace_package_version(manifest), "0.0.0")
+        stamped = STAMP.stamp_manifest(manifest, "0.171.0")
+        self.assertEqual(STAMP.workspace_package_version(stamped), "0.171.0")
+        self.assertIn('authors = ["a"]', stamped)
+
+    def test_manifest_version_is_not_taken_from_a_later_table(self) -> None:
+        manifest = '[workspace.package]\nedition = "2024"\n\n[package]\nversion = "9.9.9"\n'
+        with self.assertRaises(STAMP.StampError):
+            STAMP.workspace_package_version(manifest)
+
     def test_manifest_without_workspace_package_version_is_rejected(self) -> None:
         with self.assertRaisesRegex(STAMP.StampError, r"\[workspace\.package\]"):
             STAMP.stamp_manifest('[workspace]\nmembers = []\n', "0.171.0")
@@ -159,6 +174,19 @@ class StampWorkspaceVersionTest(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(STAMP.StampError, "codex-models-manager.*Cargo.lock"):
+                STAMP.verify(workspace, "0.171.0")
+
+            # Any other inheriting member left stale also fails verify.
+            STAMP.stamp(workspace, "0.171.0")
+            self._crate(workspace, "otel", "codex-otel", "version.workspace = true")
+            manifest = workspace / "Cargo.toml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace('"pinned"]', '"pinned", "otel"]'),
+                encoding="utf-8",
+            )
+            with lockfile.open("a", encoding="utf-8") as handle:
+                handle.write('\n[[package]]\nname = "codex-otel"\nversion = "0.0.0"\n')
+            with self.assertRaisesRegex(STAMP.StampError, "codex-otel.*Cargo.lock"):
                 STAMP.verify(workspace, "0.171.0")
 
     @staticmethod

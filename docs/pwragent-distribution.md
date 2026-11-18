@@ -214,10 +214,12 @@ only on its release tags, so every build job runs
 `scripts/pwragent-release/stamp-workspace-version.py stamp` before `cargo
 build`. That writes the plain upstream version from `upstream-version.txt` into
 `[workspace.package]` and the matching `Cargo.lock` entries, so `--locked`
-builds still work. The workspace version is never committed. It also requires
-the downstream version to start with that upstream version, so a tag cannot
-drift from the baseline. After the build, `stamp-workspace-version.py verify`
-fails the job unless the client-facing crates resolve to that version.
+builds still work. The workspace version is never committed. The metadata job
+first requires the downstream version to start with that upstream version, so a
+tag that drifted from the baseline fails before any build. After the build,
+`stamp-workspace-version.py verify` fails the job unless every crate that
+inherits the workspace version has that version in both `Cargo.toml` and
+`Cargo.lock`.
 `pwragent-release-check.yml` runs the same stamp-and-verify on every relevant
 change, without a build.
 
