@@ -186,6 +186,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Upstream main keeps the workspace at 0.0.0. Stamp the real upstream
+          # version so CARGO_PKG_VERSION (and the backend client_version) is right.
+          python3 ../scripts/pwragent-release/stamp-workspace-version.py stamp \
+            --expect-release-version "$CODEX_VERSION"
           export CODEX_BUILD_VERSION="$CODEX_VERSION"
           # Avoid overlapping memory-heavy CLI and app-server compilation on
           # hosted macOS and ARM runners; retain the normal release profile.
@@ -196,6 +200,7 @@ jobs:
             --bin codex \
             --bin codex-app-server \
             --bin codex-code-mode-host
+          python3 ../scripts/pwragent-release/stamp-workspace-version.py verify
 
       - name: Save Cargo cache
         if: always()
@@ -543,6 +548,9 @@ jobs:
         run: |
           set -euo pipefail
           export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          # See the Unix build: stamp the real upstream workspace version.
+          python ../scripts/pwragent-release/stamp-workspace-version.py stamp \
+            --expect-release-version "$CODEX_VERSION"
           export CODEX_BUILD_VERSION="$CODEX_VERSION"
           cargo build --target x86_64-pc-windows-msvc --release \
             --bin codex \
@@ -550,6 +558,7 @@ jobs:
             --bin codex-code-mode-host \
             --bin codex-windows-sandbox-setup \
             --bin codex-command-runner
+          python ../scripts/pwragent-release/stamp-workspace-version.py verify
 
       - name: Save Cargo cache
         if: always()

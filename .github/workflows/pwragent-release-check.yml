@@ -12,6 +12,7 @@ on:
       - ".github/workflows/pwragent-release*.yml"
       - ".github/workflows/pwragent-macos-unsigned.yml"
       - "docs/pwragent-distribution.md"
+      - "codex-rs/Cargo.toml"
       - "scripts/pwragent-release/**"
   push:
     branches:
@@ -20,6 +21,7 @@ on:
       - ".github/workflows/pwragent-release*.yml"
       - ".github/workflows/pwragent-macos-unsigned.yml"
       - "docs/pwragent-distribution.md"
+      - "codex-rs/Cargo.toml"
       - "scripts/pwragent-release/**"
 
 permissions:
@@ -42,8 +44,21 @@ jobs:
       - name: Validate fail-closed signing workflow
         run: python3 scripts/pwragent-release/check-release-signing.py
 
-      - name: Validate update manifest contract
-        run: python3 -m unittest scripts/pwragent-release/test_generate_update_manifest.py
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+
+      - name: Validate release script contracts
+        run: python3 -m unittest discover -s scripts/pwragent-release -p 'test_*.py'
+
+      # Release builds stamp the upstream version over the 0.0.0 placeholder.
+      # Prove that still works on this tree (e.g. after an upstream rebase
+      # changes the workspace layout) without waiting for a release build.
+      - name: Validate workspace version stamping
+        run: |
+          set -euo pipefail
+          python3 scripts/pwragent-release/stamp-workspace-version.py stamp
+          python3 scripts/pwragent-release/stamp-workspace-version.py verify
+          (cd codex-rs && cargo metadata --locked --format-version 1 >/dev/null)
 
   trusted-signing-preparation:
     name: Prepare TrustedSigning client
